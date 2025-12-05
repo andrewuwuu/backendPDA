@@ -7,7 +7,10 @@ import (
 
     "github.com/gorilla/mux"
 
+    "pda-monitor/internal/auth"
     "pda-monitor/internal/domain"
+    "pda-monitor/internal/middleware"
+    "pda-monitor/internal/report"
     "pda-monitor/internal/repository"
     "pda-monitor/internal/service"
 )
@@ -18,6 +21,9 @@ type APIHandler struct {
     calculator       *service.DebitCalculator
     stationRepo      repository.StationRepository
     formulaRepo      repository.FormulaRepository
+    userRepo         repository.UserRepository
+    jwtManager       *auth.JWTManager
+    excelService     *report.ExcelReportService
 }
 
 func NewAPIHandler(
@@ -26,6 +32,9 @@ func NewAPIHandler(
     calc *service.DebitCalculator,
     stationRepo repository.StationRepository,
     formulaRepo repository.FormulaRepository,
+    userRepo repository.UserRepository,
+    jwtManager *auth.JWTManager,
+    excelService *report.ExcelReportService,
 ) *APIHandler {
     return &APIHandler{
         telemetryService: ts,
@@ -33,33 +42,124 @@ func NewAPIHandler(
         calculator:       calc,
         stationRepo:      stationRepo,
         formulaRepo:      formulaRepo,
+        userRepo:         userRepo,
+        jwtManager:       jwtManager,
+        excelService:     excelService,
     }
 }
 
 func (h *APIHandler) RegisterRoutes(r *mux.Router) {
+    authMiddleware := middleware.NewAuthMiddleware(h.jwtManager)
+
     api := r.PathPrefix("/api").Subrouter()
 
-    // Realtime from external API
-    api.HandleFunc("/pda/realtime", h.GetRealtimeWithDebit).Methods("GET")
-    api.HandleFunc("/pda/historical", h.GetHistoricalWithDebit).Methods("GET")
+    // Public routes
+    api.HandleFunc("/auth/login", h.Login).Methods("POST")
 
-    // Hourly readings from local DB
-    api.HandleFunc("/readings/current", h.GetCurrentHourReadings).Methods("GET")
-    api.HandleFunc("/readings/current/summary", h.GetCurrentHourSummary).Methods("GET")
-    api.HandleFunc("/readings/current/latest", h.GetLatestReadings).Methods("GET")
-    api.HandleFunc("/readings/station/{namaLokasi}", h.GetStationReadings).Methods("GET")
+    // Protected routes
+    protected := api.PathPrefix("").Subrouter()
+    protected.Use(authMiddleware.Authenticate)
+
+    // PDA endpoints
+    protected.HandleFunc("/pda/realtime", h.GetRealtimeWithDebit).Methods("GET")
+    protected.HandleFunc("/pda/historical", h.GetHistoricalWithDebit).Methods("GET")
+
+    // Readings endpoints
+    protected.HandleFunc("/readings/current", h.GetCurrentHourReadings).Methods("GET")
+    protected.HandleFunc("/readings/current/summary", h.GetCurrentHourSummary).Methods("GET")
+    protected.HandleFunc("/readings/current/latest", h.GetLatestReadings).Methods("GET")
+    protected.HandleFunc("/readings/station/{namaLokasi}", h.GetStationReadings).Methods("GET")
 
     // Stations
-    api.HandleFunc("/stations", h.GetStations).Methods("GET")
-    api.HandleFunc("/stations/{namaLokasi}", h.GetStation).Methods("GET")
-    api.HandleFunc("/stations/sync", h.SyncStations).Methods("POST")
+    protected.HandleFunc("/stations", h.GetStations).Methods("GET")
+    protected.HandleFunc("/stations/{namaLokasi}", h.GetStation).Methods("GET")
+    protected.HandleFunc("/stations/sync", h.SyncStations).Methods("POST")
 
     // Formulas
-    api.HandleFunc("/formulas", h.GetFormulas).Methods("GET")
-    api.HandleFunc("/formulas", h.CreateFormula).Methods("POST")
-    api.HandleFunc("/formulas/{namaLokasi}", h.GetFormula).Methods("GET")
-    api.HandleFunc("/formulas/{namaLokasi}", h.UpdateFormula).Methods("PUT")
-    api.HandleFunc("/formulas/{namaLokasi}", h.DeleteFormula).Methods("DELETE")
+    protected.HandleFunc("/formulas", h.GetFormulas).Methods("GET")
+    protected.HandleFunc("/formulas/{namaLokasi}", h.GetFormula).Methods("GET")
+
+    // Admin routes
+    adminRoutes := protected.PathPrefix("").Subrouter()
+    adminRoutes.Use(authMiddleware.RequireRole("admin"))
+    adminRoutes.HandleFunc("/formulas", h.CreateFormula).Methods("POST")
+    adminRoutes.HandleFunc("/formulas/{namaLokasi}", h.UpdateFormula).Methods("PUT")
+    adminRoutes.HandleFunc("/formulas/{namaLokasi}", h.DeleteFormula).Methods("DELETE")
+
+    // Report endpoints
+    protected.HandleFunc("/reports/export", h.ExportReport).Methods("GET")
+
+    // Debug endpoint (admin only)
+    adminRoutes.HandleFunc("/debug/jwt", h.GetJWTInfo).Methods("GET")
+}
+
+// ==================== Auth ====================
+
+func (h *APIHandler) Login(w http.ResponseWriter, r *http.Request) {
+    ctx := r.Context()
+
+    var req domain.LoginRequest
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        h.jsonError(w, "invalid request body", http.StatusBadRequest)
+        return
+    }
+
+    user, err := h.userRepo.GetByUsername(ctx, req.Username)
+    if err != nil || user == nil {
+        h.jsonError(w, "invalid credentials", http.StatusUnauthorized)
+        return
+    }
+
+    if !h.userRepo.ValidatePassword(user, req.Password) {
+        h.jsonError(w, "invalid credentials", http.StatusUnauthorized)
+        return
+    }
+
+    token, err := h.jwtManager.GenerateToken(user.ID, user.Username, user.Role)
+    if err != nil {
+        h.jsonError(w, "failed to generate token", http.StatusInternalServerError)
+        return
+    }
+
+    h.jsonResponse(w, domain.LoginResponse{
+        Token: token,
+        User:  *user,
+    })
+}
+
+// ==================== Debug ====================
+
+func (h *APIHandler) GetJWTInfo(w http.ResponseWriter, r *http.Request) {
+    h.jsonResponse(w, h.jwtManager.GetKeyInfo())
+}
+
+// ==================== Reports ====================
+
+func (h *APIHandler) ExportReport(w http.ResponseWriter, r *http.Request) {
+    ctx := r.Context()
+
+    records, err := h.telemetryService.FetchRealtime(ctx)
+    if err != nil {
+        h.jsonError(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    results, err := h.calculator.CalculateBatch(ctx, records)
+    if err != nil {
+        h.jsonError(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    now := time.Now()
+    buf, filename, err := h.excelService.GenerateDebitReport(results, now)
+    if err != nil {
+        h.jsonError(w, err.Error(), http.StatusInternalServerError)
+        return
+    }
+
+    w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    w.Header().Set("Content-Disposition", "attachment; filename="+filename)
+    w.Write(buf.Bytes())
 }
 
 // ==================== Readings ====================
@@ -109,7 +209,6 @@ func (h *APIHandler) GetLatestReadings(w http.ResponseWriter, r *http.Request) {
 func (h *APIHandler) GetStationReadings(w http.ResponseWriter, r *http.Request) {
     ctx := r.Context()
     namaLokasi := mux.Vars(r)["namaLokasi"]
-
     readings, err := h.readingService.GetCurrentHourByStation(ctx, namaLokasi)
     if err != nil {
         h.jsonError(w, err.Error(), http.StatusInternalServerError)

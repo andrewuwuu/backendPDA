@@ -15,6 +15,7 @@ type Config struct {
     Database  DatabaseConfig
     Telemetry TelemetryConfig
     Telegram  TelegramConfig
+    JWT       JWTConfig
 }
 
 type ServerConfig struct {
@@ -48,6 +49,11 @@ type TelemetryConfig struct {
 type TelegramConfig struct {
     BotToken string
     ChatIDs  []int64
+    Channels []string
+}
+
+type JWTConfig struct {
+    ExpiryHours int
 }
 
 func Load() *Config {
@@ -74,6 +80,10 @@ func Load() *Config {
         Telegram: TelegramConfig{
             BotToken: getEnv("TELEGRAM_BOT_TOKEN", ""),
             ChatIDs:  getEnvInt64Slice("TELEGRAM_CHAT_IDS"),
+            Channels: getEnvStringSlice("TELEGRAM_CHANNELS"),
+        },
+        JWT: JWTConfig{
+            ExpiryHours: getEnvInt("JWT_EXPIRY_HOURS", 24),
         },
     }
 
@@ -119,6 +129,25 @@ func getEnvInt64Slice(key string) []int64 {
         p = strings.TrimSpace(p)
         if id, err := strconv.ParseInt(p, 10, 64); err == nil {
             result = append(result, id)
+        }
+    }
+
+    return result
+}
+
+func getEnvStringSlice(key string) []string {
+    value := os.Getenv(key)
+    if value == "" {
+        return nil
+    }
+
+    parts := strings.Split(value, ",")
+    result := make([]string, 0, len(parts))
+
+    for _, p := range parts {
+        p = strings.TrimSpace(p)
+        if p != "" {
+            result = append(result, p)
         }
     }
 

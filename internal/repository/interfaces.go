@@ -31,3 +31,10 @@ type ReadingRepository interface {
     GetLatestReadingPerStation(ctx context.Context) ([]domain.HourlyReading, error)
     CleanupOldReadings(ctx context.Context, hoursToKeep int) (int64, error)
 }
+
+type UserRepository interface {
+    GetByUsername(ctx context.Context, username string) (*domain.User, error)
+    GetByID(ctx context.Context, id int64) (*domain.User, error)
+    Create(ctx context.Context, user *domain.User, password string) error
+    ValidatePassword(user *domain.User, password string) bool
+}

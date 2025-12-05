@@ -13,10 +13,12 @@ import (
     _ "github.com/go-sql-driver/mysql"
     "github.com/jmoiron/sqlx"
 
+    "pda-monitor/internal/auth"
     "pda-monitor/internal/config"
     "pda-monitor/internal/handler"
     "pda-monitor/internal/notification"
     "pda-monitor/internal/parser"
+    "pda-monitor/internal/report"
     mysqlrepo "pda-monitor/internal/repository/mysql"
     "pda-monitor/internal/scheduler"
     "pda-monitor/internal/service"
@@ -40,6 +42,11 @@ func main() {
     stationRepo := mysqlrepo.NewStationRepo(db)
     formulaRepo := mysqlrepo.NewFormulaRepo(db)
     readingRepo := mysqlrepo.NewReadingRepo(db)
+    userRepo := mysqlrepo.NewUserRepo(db)
+
+    // JWT Manager (auto-generates 256-bit key, rotates every 24h)
+    jwtManager := auth.NewJWTManager(cfg.JWT.ExpiryHours)
+    defer jwtManager.Stop()
 
     // Services
     telemetryParser := parser.NewTelemetryParser()
@@ -60,6 +67,9 @@ func main() {
     )
 
     readingService := service.NewReadingService(readingRepo, calculator)
+
+    // Excel Report Service
+    excelService := report.NewExcelReportService()
 
     // Initial sync on startup
     go func() {
@@ -85,22 +95,28 @@ func main() {
 
     // Telegram notifier
     var telegram *notification.TelegramNotifier
-    if cfg.Telegram.BotToken != "" && len(cfg.Telegram.ChatIDs) > 0 {
+    if cfg.Telegram.BotToken != "" && (len(cfg.Telegram.ChatIDs) > 0 || len(cfg.Telegram.Channels) > 0) {
         telegram, err = notification.NewTelegramNotifier(notification.TelegramConfig{
             BotToken: cfg.Telegram.BotToken,
             ChatIDs:  cfg.Telegram.ChatIDs,
+            Channels: cfg.Telegram.Channels,
         })
         if err != nil {
             log.Printf("Warning: failed to create Telegram notifier: %v", err)
         } else {
-            log.Printf("Telegram notifier configured for %d chat(s)", len(cfg.Telegram.ChatIDs))
+            log.Println("Telegram notifier configured")
         }
     } else {
         log.Println("Warning: Telegram not configured")
     }
 
     // Scheduler
-    sched := scheduler.NewScheduler(telemetryService, readingService, calculator, telegram)
+    sched := scheduler.NewScheduler(
+        telemetryService,
+        readingService,
+        calculator,
+        telegram,
+    )
     if err := sched.Start(); err != nil {
         log.Fatalf("Failed to start scheduler: %v", err)
     }
@@ -113,6 +129,9 @@ func main() {
         calculator,
         stationRepo,
         formulaRepo,
+        userRepo,
+        jwtManager,
+        excelService,
     )
 
     router := mux.NewRouter()
