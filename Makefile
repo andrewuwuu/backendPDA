@@ -7,6 +7,16 @@ build:
 	@mkdir -p $(BIN_DIR)
 	$(GO) build -o $(BIN_DIR)/$(APP_NAME) ./cmd/server
 
+# Dev-only run (loads .env if present)
+run: build
+	@if [ -f .env ]; then \
+		export $$(cat .env | grep -v '^#' | xargs) && \
+		$(BIN_DIR)/$(APP_NAME); \
+	else \
+		echo "WARNING: .env not found, running without env"; \
+		$(BIN_DIR)/$(APP_NAME); \
+	fi
+
 install-user: build
 	mkdir -p $$HOME/.local/bin
 	mkdir -p $$HOME/.local/share/pda-monitor
