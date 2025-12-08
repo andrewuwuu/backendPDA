@@ -31,7 +31,6 @@ type ReadingRepository interface {
     GetHourlySummary(ctx context.Context) ([]domain.HourlySummary, error)
     GetLatestReadingPerStation(ctx context.Context) ([]domain.HourlyReading, error)
     CleanupOldReadings(ctx context.Context, hoursToKeep int) (int64, error)
-    
     GetTMARangeForDay(ctx context.Context, date time.Time, startHour, endHour int) ([]domain.TMARangeSummary, error)
     GetDebitAtHours(ctx context.Context, date time.Time, hours []int) ([]domain.HourlyDebitSnapshot, error)
 }
@@ -41,4 +40,5 @@ type UserRepository interface {
     GetByID(ctx context.Context, id int64) (*domain.User, error)
     Create(ctx context.Context, user *domain.User, password string) error
     ValidatePassword(user *domain.User, password string) bool
+    UpdatePassword(ctx context.Context, userID int64, newPassword string) error
 }
