@@ -2,7 +2,6 @@ package main
 
 import (
     "context"
-    "log"
     "net/http"
     "os"
     "os/signal"
@@ -16,6 +15,7 @@ import (
     "pda-monitor/internal/auth"
     "pda-monitor/internal/config"
     "pda-monitor/internal/handler"
+    "pda-monitor/internal/logger"
     "pda-monitor/internal/notification"
     "pda-monitor/internal/parser"
     "pda-monitor/internal/report"
@@ -24,18 +24,34 @@ import (
     "pda-monitor/internal/service"
 )
 
+const component = "Main"
+
 func main() {
     cfg := config.Load()
 
-    log.Println("Starting PDA Monitor...")
-    log.Printf("  Database: %s@%s:%s/%s", cfg.Database.User, cfg.Database.Host, cfg.Database.Port, cfg.Database.Name)
-    log.Printf("  Telemetry API: %s", cfg.Telemetry.BaseURL)
+    if err := logger.Init(logger.Config{
+        Level:    cfg.Logging.Level,
+        FilePath: cfg.Logging.FilePath,
+        Console:  cfg.Logging.Console,
+    }); err != nil {
+        panic("Failed to initialize logger: " + err.Error())
+    }
+    defer logger.Close()
+
+    logger.Info(component, "Starting PDA Monitor", logger.Fields(
+        "db_host", cfg.Database.Host,
+        "db_port", cfg.Database.Port,
+        "db_name", cfg.Database.Name,
+        "telemetry_url", cfg.Telemetry.BaseURL,
+        "log_level", cfg.Logging.Level,
+    ))
 
     db, err := sqlx.Connect("mysql", cfg.Database.DSN())
     if err != nil {
-        log.Fatalf("Failed to connect to database: %v", err)
+        logger.Fatal(component, "Failed to connect to database", logger.F("error", err.Error()))
     }
     defer db.Close()
+    logger.Info(component, "Database connected successfully")
 
     stationRepo := mysqlrepo.NewStationRepo(db)
     formulaRepo := mysqlrepo.NewFormulaRepo(db)
@@ -44,12 +60,15 @@ func main() {
 
     jwtManager := auth.NewJWTManager(cfg.JWT.ExpiryHours)
     defer jwtManager.Stop()
+    logger.Info(component, "JWT Manager initialized", logger.F("expiry_hours", cfg.JWT.ExpiryHours))
 
     telemetryParser := parser.NewTelemetryParser()
 
     calculator := service.NewDebitCalculator(formulaRepo)
     if err := calculator.RefreshCache(context.Background()); err != nil {
-        log.Printf("Warning: failed to preload formula cache: %v", err)
+        logger.Warn(component, "Failed to preload formula cache", logger.F("error", err.Error()))
+    } else {
+        logger.Info(component, "Formula cache loaded")
     }
 
     telemetryService := service.NewTelemetryService(
@@ -63,26 +82,25 @@ func main() {
     )
 
     readingService := service.NewReadingService(readingRepo, calculator)
-
     excelService := report.NewExcelReportService()
 
     go func() {
         ctx := context.Background()
 
         if count, err := telemetryService.SyncStations(ctx); err != nil {
-            log.Printf("Warning: initial station sync failed: %v", err)
+            logger.Warn(component, "Initial station sync failed", logger.F("error", err.Error()))
         } else {
-            log.Printf("Initial station sync: %d stations", count)
+            logger.Info(component, "Initial station sync completed", logger.F("count", count))
         }
 
         records, err := telemetryService.FetchRealtime(ctx)
         if err != nil {
-            log.Printf("Warning: initial readings sync failed: %v", err)
+            logger.Warn(component, "Initial readings sync failed", logger.F("error", err.Error()))
         } else {
             if count, err := readingService.ProcessAndStoreReadings(ctx, records); err != nil {
-                log.Printf("Warning: storing initial readings failed: %v", err)
+                logger.Warn(component, "Storing initial readings failed", logger.F("error", err.Error()))
             } else {
-                log.Printf("Initial readings sync: %d readings", count)
+                logger.Info(component, "Initial readings sync completed", logger.F("count", count))
             }
         }
     }()
@@ -95,12 +113,15 @@ func main() {
             Channels: cfg.Telegram.Channels,
         })
         if err != nil {
-            log.Printf("Warning: failed to create Telegram notifier: %v", err)
+            logger.Warn(component, "Failed to create Telegram notifier", logger.F("error", err.Error()))
         } else {
-            log.Println("Telegram notifier configured")
+            logger.Info(component, "Telegram notifier configured", logger.Fields(
+                "chat_ids", len(cfg.Telegram.ChatIDs),
+                "channels", len(cfg.Telegram.Channels),
+            ))
         }
     } else {
-        log.Println("Warning: Telegram not configured")
+        logger.Warn(component, "Telegram not configured")
     }
 
     sched := scheduler.NewScheduler(
@@ -112,7 +133,7 @@ func main() {
         stationRepo,
     )
     if err := sched.Start(); err != nil {
-        log.Fatalf("Failed to start scheduler: %v", err)
+        logger.Fatal(component, "Failed to start scheduler", logger.F("error", err.Error()))
     }
     defer sched.Stop()
 
@@ -144,30 +165,55 @@ func main() {
     }
 
     go func() {
-        log.Printf("Server starting on port %s", cfg.Server.Port)
+        logger.Info(component, "HTTP server starting", logger.F("port", cfg.Server.Port))
         if err := server.ListenAndServe(); err != http.ErrServerClosed {
-            log.Fatalf("Server error: %v", err)
+            logger.Fatal(component, "Server error", logger.F("error", err.Error()))
         }
     }()
 
     quit := make(chan os.Signal, 1)
     signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-    <-quit
+    sig := <-quit
 
-    log.Println("Shutting down...")
+    logger.Info(component, "Shutdown signal received", logger.F("signal", sig.String()))
+
     ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
     defer cancel()
 
-    server.Shutdown(ctx)
-    log.Println("Server stopped")
+    if err := server.Shutdown(ctx); err != nil {
+        logger.Error(component, "Server shutdown error", logger.F("error", err.Error()))
+    }
+
+    logger.Info(component, "Server stopped gracefully")
 }
 
 func loggingMiddleware(next http.Handler) http.Handler {
     return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         start := time.Now()
-        next.ServeHTTP(w, r)
-        log.Printf("%s %s %s", r.Method, r.RequestURI, time.Since(start))
+
+        wrapped := &statusResponseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+
+        next.ServeHTTP(wrapped, r)
+
+        duration := time.Since(start)
+        logger.Info("HTTP", "Request completed", logger.Fields(
+            "method", r.Method,
+            "path", r.RequestURI,
+            "status", wrapped.statusCode,
+            "duration_ms", duration.Milliseconds(),
+            "remote_addr", r.RemoteAddr,
+        ))
     })
+}
+
+type statusResponseWriter struct {
+    http.ResponseWriter
+    statusCode int
+}
+
+func (w *statusResponseWriter) WriteHeader(code int) {
+    w.statusCode = code
+    w.ResponseWriter.WriteHeader(code)
 }
 
 func corsMiddleware(next http.Handler) http.Handler {

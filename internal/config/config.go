@@ -16,6 +16,7 @@ type Config struct {
     Telemetry TelemetryConfig
     Telegram  TelegramConfig
     JWT       JWTConfig
+    Logging   LoggingConfig
 }
 
 type ServerConfig struct {
@@ -56,6 +57,12 @@ type JWTConfig struct {
     ExpiryHours int
 }
 
+type LoggingConfig struct {
+    Level    string
+    FilePath string
+    Console  bool
+}
+
 func Load() *Config {
     if err := godotenv.Load(); err != nil {
         log.Println("Warning: .env file not found, using environment variables")
@@ -85,6 +92,11 @@ func Load() *Config {
         JWT: JWTConfig{
             ExpiryHours: getEnvInt("JWT_EXPIRY_HOURS", 24),
         },
+        Logging: LoggingConfig{
+            Level:    getEnv("LOG_LEVEL", "INFO"),
+            FilePath: getEnv("LOG_FILE", ""),
+            Console:  getEnvBool("LOG_CONSOLE", true),
+        },
     }
 
     cfg.validate()
@@ -111,6 +123,15 @@ func getEnvInt(key string, defaultValue int) int {
     if value := os.Getenv(key); value != "" {
         if i, err := strconv.Atoi(value); err == nil {
             return i
+        }
+    }
+    return defaultValue
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+    if value := os.Getenv(key); value != "" {
+        if b, err := strconv.ParseBool(value); err == nil {
+            return b
         }
     }
     return defaultValue

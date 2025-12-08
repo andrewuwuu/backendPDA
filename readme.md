@@ -28,6 +28,55 @@ Lightweight Go-based telemetry monitor that ingests third-party telemetry data, 
 
 ## Project Layout
 
+````text
+.
+├── api_docs.md
+├── bin/
+│   └── pda-monitor
+├── cmd/
+│   └── server/
+│       └── main.go
+├── go.mod
+├── go.sum
+├── internal/
+│   ├── auth/
+│   │   └── jwt.go
+│   ├── config/
+│   │   └── config.go
+│   ├── domain/
+│   │   ├── formula.go
+│   │   ├── reading.go
+│   │   ├── station.go
+│   │   └── user.go
+│   ├── handler/
+│   │   └── api_handler.go
+│   ├── logger/
+│   │   └── logger.go
+│   ├── middleware/
+│   │   └── auth.go
+│   ├── notification/
+│   │   └── telegram.go
+│   ├── parser/
+│   │   └── telemetry_parser.go
+│   ├── report/
+│   │   └── excel.go
+│   ├── repository/
+│   │   ├── interfaces.go
+│   │   └── mysql/
+│   │       ├── formula_repo.go
+│   │       ├── reading_repo.go
+│   │       ├── station_repo.go
+│   │       └── user_repo.go
+│   ├── scheduler/
+│   │   └── scheduler.go
+│   ├── service/
+│   │   ├── debit_calculator.go
+│   │   ├── reading_service.go
+│   │   └── telemetry_service.go
+│   └── util/
+│       └── station.go
+├── Makefile
+└── readme.md
 ```text
 .
 ├── cmd/server/        # Application entry point
@@ -36,7 +85,7 @@ Lightweight Go-based telemetry monitor that ingests third-party telemetry data, 
 ├── bin/               # Local build output
 ├── Makefile
 └── go.mod
-```
+````
 
 ---
 
@@ -64,7 +113,18 @@ TELEGRAM_CHAT_IDS=xxxx
 TELEGRAM_CHANNELS=xxxx
 
 JWT_EXPIRY_HOURS=24
+
+# Logging
+LOG_LEVEL=INFO          # DEBUG, INFO, WARN, ERROR
+LOG_FILE=/path/to/log/pda-monitor/app.log  # Leave empty for no file logging
+LOG_CONSOLE=true        # Output to console/stdout
 ```
+
+### Logging Behavior
+
+* `LOG_CONSOLE=true` → logs are always written to stdout (captured by systemd journal).
+* `LOG_FILE` → optional secondary file log. If empty, file logging is disabled.
+* The **log directory path is fully customizable** via `LOG_FILE`. You must ensure the directory exists and is writable by the runtime user.
 
 Systemd loads this file directly at runtime.
 

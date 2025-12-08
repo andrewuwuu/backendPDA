@@ -10,8 +10,11 @@ import (
     tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
     "pda-monitor/internal/domain"
+    "pda-monitor/internal/logger"
     "pda-monitor/internal/util"
 )
+
+const component = "Telegram"
 
 var jakartaLoc *time.Location
 
@@ -41,6 +44,8 @@ func NewTelegramNotifier(config TelegramConfig) (*TelegramNotifier, error) {
         return nil, fmt.Errorf("failed to create telegram bot: %w", err)
     }
 
+    logger.Info(component, "Telegram bot initialized", logger.F("bot_username", bot.Self.UserName))
+
     return &TelegramNotifier{
         bot:      bot,
         chatIDs:  config.ChatIDs,
@@ -67,12 +72,21 @@ func (t *TelegramNotifier) SendDailyExcelReport(ctx context.Context, reports []d
 }
 
 func (t *TelegramNotifier) sendMessage(message string) error {
+    successCount := 0
+    failCount := 0
+
     for _, chatID := range t.chatIDs {
         msg := tgbotapi.NewMessage(chatID, message)
         msg.ParseMode = tgbotapi.ModeHTML
 
         if _, err := t.bot.Send(msg); err != nil {
-            return fmt.Errorf("failed to send to chat %d: %w", chatID, err)
+            logger.Error(component, "Failed to send message to chat", logger.Fields(
+                "chat_id", chatID,
+                "error", err.Error(),
+            ))
+            failCount++
+        } else {
+            successCount++
         }
     }
 
@@ -81,8 +95,23 @@ func (t *TelegramNotifier) sendMessage(message string) error {
         msg.ParseMode = tgbotapi.ModeHTML
 
         if _, err := t.bot.Send(msg); err != nil {
-            return fmt.Errorf("failed to send to channel %s: %w", channel, err)
+            logger.Error(component, "Failed to send message to channel", logger.Fields(
+                "channel", channel,
+                "error", err.Error(),
+            ))
+            failCount++
+        } else {
+            successCount++
         }
+    }
+
+    logger.Debug(component, "Message delivery completed", logger.Fields(
+        "success", successCount,
+        "failed", failCount,
+    ))
+
+    if failCount > 0 && successCount == 0 {
+        return fmt.Errorf("failed to send to all %d recipients", failCount)
     }
 
     return nil
@@ -94,12 +123,22 @@ func (t *TelegramNotifier) sendDocument(data *bytes.Buffer, filename string) err
         Bytes: data.Bytes(),
     }
 
+    successCount := 0
+    failCount := 0
+
     for _, chatID := range t.chatIDs {
         doc := tgbotapi.NewDocument(chatID, fileBytes)
         doc.Caption = "Laporan Harian Debit PDA"
 
         if _, err := t.bot.Send(doc); err != nil {
-            return fmt.Errorf("failed to send document to chat %d: %w", chatID, err)
+            logger.Error(component, "Failed to send document to chat", logger.Fields(
+                "chat_id", chatID,
+                "filename", filename,
+                "error", err.Error(),
+            ))
+            failCount++
+        } else {
+            successCount++
         }
     }
 
@@ -115,8 +154,26 @@ func (t *TelegramNotifier) sendDocument(data *bytes.Buffer, filename string) err
         }
 
         if _, err := t.bot.Send(doc); err != nil {
-            return fmt.Errorf("failed to send document to channel %s: %w", channel, err)
+            logger.Error(component, "Failed to send document to channel", logger.Fields(
+                "channel", channel,
+                "filename", filename,
+                "error", err.Error(),
+            ))
+            failCount++
+        } else {
+            successCount++
         }
+    }
+
+    logger.Debug(component, "Document delivery completed", logger.Fields(
+        "filename", filename,
+        "size_bytes", data.Len(),
+        "success", successCount,
+        "failed", failCount,
+    ))
+
+    if failCount > 0 && successCount == 0 {
+        return fmt.Errorf("failed to send document to all %d recipients", failCount)
     }
 
     return nil

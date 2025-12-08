@@ -10,7 +10,9 @@ build:
 # Dev-only run (loads .env if present)
 run: build
 	@if [ -f .env ]; then \
-		export $$(cat .env | grep -v '^#' | xargs) && \
+		set -a; \
+		. ./.env; \
+		set +a; \
 		$(BIN_DIR)/$(APP_NAME); \
 	else \
 		echo "WARNING: .env not found, running without env"; \
