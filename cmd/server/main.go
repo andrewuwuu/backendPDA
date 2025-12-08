@@ -31,24 +31,20 @@ func main() {
     log.Printf("  Database: %s@%s:%s/%s", cfg.Database.User, cfg.Database.Host, cfg.Database.Port, cfg.Database.Name)
     log.Printf("  Telemetry API: %s", cfg.Telemetry.BaseURL)
 
-    // Database connection
     db, err := sqlx.Connect("mysql", cfg.Database.DSN())
     if err != nil {
         log.Fatalf("Failed to connect to database: %v", err)
     }
     defer db.Close()
 
-    // Repositories
     stationRepo := mysqlrepo.NewStationRepo(db)
     formulaRepo := mysqlrepo.NewFormulaRepo(db)
     readingRepo := mysqlrepo.NewReadingRepo(db)
     userRepo := mysqlrepo.NewUserRepo(db)
 
-    // JWT Manager (auto-generates 256-bit key, rotates every 24h)
     jwtManager := auth.NewJWTManager(cfg.JWT.ExpiryHours)
     defer jwtManager.Stop()
 
-    // Services
     telemetryParser := parser.NewTelemetryParser()
 
     calculator := service.NewDebitCalculator(formulaRepo)
@@ -68,10 +64,8 @@ func main() {
 
     readingService := service.NewReadingService(readingRepo, calculator)
 
-    // Excel Report Service
     excelService := report.NewExcelReportService()
 
-    // Initial sync on startup
     go func() {
         ctx := context.Background()
 
@@ -93,7 +87,6 @@ func main() {
         }
     }()
 
-    // Telegram notifier
     var telegram *notification.TelegramNotifier
     if cfg.Telegram.BotToken != "" && (len(cfg.Telegram.ChatIDs) > 0 || len(cfg.Telegram.Channels) > 0) {
         telegram, err = notification.NewTelegramNotifier(notification.TelegramConfig{
@@ -110,19 +103,19 @@ func main() {
         log.Println("Warning: Telegram not configured")
     }
 
-    // Scheduler
     sched := scheduler.NewScheduler(
         telemetryService,
         readingService,
         calculator,
         telegram,
+        excelService,
+        stationRepo,
     )
     if err := sched.Start(); err != nil {
         log.Fatalf("Failed to start scheduler: %v", err)
     }
     defer sched.Stop()
 
-    // HTTP Handler
     apiHandler := handler.NewAPIHandler(
         telemetryService,
         readingService,

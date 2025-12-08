@@ -25,3 +25,26 @@ type HourlySummary struct {
     MaxDebit     *float64  `json:"max_debit" db:"max_debit"`
     TotalRain    float64   `json:"total_rain" db:"total_rain"`
 }
+
+type TMARangeSummary struct {
+    NamaLokasi string   `json:"nama_lokasi" db:"nama_lokasi"`
+    MinTMA     *float64 `json:"min_tma" db:"min_tma"`
+    MaxTMA     *float64 `json:"max_tma" db:"max_tma"`
+}
+
+type HourlyDebitSnapshot struct {
+    NamaLokasi string   `json:"nama_lokasi" db:"nama_lokasi"`
+    Hour       int      `json:"hour" db:"hour"`
+    Debit      *float64 `json:"debit" db:"debit"`
+    TMA        float64  `json:"tma" db:"tma"`
+}
+
+type DailyStationReport struct {
+    NamaLokasi string
+    NamaAlat   string
+    Debit07    *float64
+    Debit12    *float64
+    Debit17    *float64
+    MinTMA     *float64
+    MaxTMA     *float64
+}

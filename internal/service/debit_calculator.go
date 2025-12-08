@@ -24,7 +24,6 @@ func NewDebitCalculator(repo repository.FormulaRepository) *DebitCalculator {
     }
 }
 
-// Calculate computes: Q = C × (TMA - H₀)^B
 func (dc *DebitCalculator) Calculate(ctx context.Context, record domain.PDARecord) (*domain.DebitResult, error) {
     result := &domain.DebitResult{
         NamaLokasi:   record.NamaLokasi,
@@ -53,6 +52,7 @@ func (dc *DebitCalculator) Calculate(ctx context.Context, record domain.PDARecor
     }
 
     base := record.TMA - params.H0
+
     if base < 0 {
         result.IsValid = false
         result.Debit = 0

@@ -9,6 +9,16 @@ import (
     "pda-monitor/internal/repository"
 )
 
+var jakartaLoc *time.Location
+
+func init() {
+    var err error
+    jakartaLoc, err = time.LoadLocation("Asia/Jakarta")
+    if err != nil {
+        jakartaLoc = time.FixedZone("WIB", 7*60*60)
+    }
+}
+
 type ReadingService struct {
     readingRepo repository.ReadingRepository
     calculator  *DebitCalculator
@@ -83,6 +93,37 @@ func (s *ReadingService) GetLatestReadings(ctx context.Context) ([]domain.Hourly
 
 func (s *ReadingService) CleanupOldData(ctx context.Context, hoursToKeep int) (int64, error) {
     return s.readingRepo.CleanupOldReadings(ctx, hoursToKeep)
+}
+
+func (s *ReadingService) GetDailyTMASummary(ctx context.Context, date time.Time) (map[string]domain.TMARangeSummary, error) {
+    summaries, err := s.readingRepo.GetTMARangeForDay(ctx, date, 7, 17)
+    if err != nil {
+        return nil, err
+    }
+
+    result := make(map[string]domain.TMARangeSummary)
+    for _, summary := range summaries {
+        result[summary.NamaLokasi] = summary
+    }
+
+    return result, nil
+}
+
+func (s *ReadingService) GetDebitSnapshots(ctx context.Context, date time.Time, hours []int) (map[string]map[int]*float64, error) {
+    snapshots, err := s.readingRepo.GetDebitAtHours(ctx, date, hours)
+    if err != nil {
+        return nil, err
+    }
+
+    result := make(map[string]map[int]*float64)
+    for _, snap := range snapshots {
+        if result[snap.NamaLokasi] == nil {
+            result[snap.NamaLokasi] = make(map[int]*float64)
+        }
+        result[snap.NamaLokasi][snap.Hour] = snap.Debit
+    }
+
+    return result, nil
 }
 
 func truncateToHour(t time.Time) time.Time {

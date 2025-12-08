@@ -137,6 +137,65 @@ func (r *ReadingRepo) CleanupOldReadings(ctx context.Context, hoursToKeep int) (
     return result.RowsAffected()
 }
 
+func (r *ReadingRepo) GetTMARangeForDay(ctx context.Context, date time.Time, startHour, endHour int) ([]domain.TMARangeSummary, error) {
+    var summaries []domain.TMARangeSummary
+
+    loc, _ := time.LoadLocation("Asia/Jakarta")
+    startTime := time.Date(date.Year(), date.Month(), date.Day(), startHour, 0, 0, 0, loc)
+    endTime := time.Date(date.Year(), date.Month(), date.Day(), endHour, 59, 59, 0, loc)
+
+    query := `
+        SELECT 
+            nama_lokasi,
+            MIN(tma) as min_tma,
+            MAX(tma) as max_tma
+        FROM hourly_readings
+        WHERE recorded_at >= ? AND recorded_at <= ?
+        GROUP BY nama_lokasi
+        ORDER BY nama_lokasi`
+
+    err := r.db.SelectContext(ctx, &summaries, query, startTime, endTime)
+    return summaries, err
+}
+
+func (r *ReadingRepo) GetDebitAtHours(ctx context.Context, date time.Time, hours []int) ([]domain.HourlyDebitSnapshot, error) {
+    if len(hours) == 0 {
+        return nil, nil
+    }
+
+    var snapshots []domain.HourlyDebitSnapshot
+    loc, _ := time.LoadLocation("Asia/Jakarta")
+
+    for _, hour := range hours {
+        hourBucket := time.Date(date.Year(), date.Month(), date.Day(), hour, 0, 0, 0, loc)
+
+        query := `
+            SELECT 
+                nama_lokasi,
+                ? as hour,
+                debit,
+                tma
+            FROM hourly_readings
+            WHERE hour_bucket = ?
+            AND recorded_at = (
+                SELECT MAX(recorded_at) 
+                FROM hourly_readings hr2 
+                WHERE hr2.nama_lokasi = hourly_readings.nama_lokasi 
+                AND hr2.hour_bucket = ?
+            )`
+
+        var hourSnapshots []domain.HourlyDebitSnapshot
+        err := r.db.SelectContext(ctx, &hourSnapshots, query, hour, hourBucket, hourBucket)
+        if err != nil {
+            return nil, err
+        }
+
+        snapshots = append(snapshots, hourSnapshots...)
+    }
+
+    return snapshots, nil
+}
+
 func truncateToHour(t time.Time) time.Time {
     return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, t.Location())
 }

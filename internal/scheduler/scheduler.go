@@ -8,11 +8,25 @@ import (
 
     "github.com/robfig/cron/v3"
 
+    "pda-monitor/internal/domain"
     "pda-monitor/internal/notification"
+    "pda-monitor/internal/report"
+    "pda-monitor/internal/repository"
     "pda-monitor/internal/service"
+    "pda-monitor/internal/util"
 )
 
-const HoursToKeep = 2
+const HoursToKeep = 24
+
+var jakartaLoc *time.Location
+
+func init() {
+    var err error
+    jakartaLoc, err = time.LoadLocation("Asia/Jakarta")
+    if err != nil {
+        jakartaLoc = time.FixedZone("WIB", 7*60*60)
+    }
+}
 
 type Scheduler struct {
     cron             *cron.Cron
@@ -20,6 +34,8 @@ type Scheduler struct {
     readingService   *service.ReadingService
     calculator       *service.DebitCalculator
     telegram         *notification.TelegramNotifier
+    excelService     *report.ExcelReportService
+    stationRepo      repository.StationRepository
 }
 
 func NewScheduler(
@@ -27,53 +43,52 @@ func NewScheduler(
     readingService *service.ReadingService,
     calculator *service.DebitCalculator,
     telegram *notification.TelegramNotifier,
+    excelService *report.ExcelReportService,
+    stationRepo repository.StationRepository,
 ) *Scheduler {
-    loc, _ := time.LoadLocation("Asia/Jakarta")
-
     return &Scheduler{
-        cron:             cron.New(cron.WithLocation(loc)),
+        cron:             cron.New(cron.WithLocation(jakartaLoc)),
         telemetryService: telemetryService,
         readingService:   readingService,
         calculator:       calculator,
         telegram:         telegram,
+        excelService:     excelService,
+        stationRepo:      stationRepo,
     }
 }
 
 func (s *Scheduler) Start() error {
-    // Sync readings every 5 minutes
-    _, err := s.cron.AddFunc("*/5 * * * *", s.syncReadings)
-    if err != nil {
+    if _, err := s.cron.AddFunc("*/5 * * * *", s.syncReadings); err != nil {
         return err
     }
 
-    // Cleanup old readings at :01 every hour
-    _, err = s.cron.AddFunc("1 * * * *", s.cleanupOldReadings)
-    if err != nil {
+    if _, err := s.cron.AddFunc("30 0 * * *", s.cleanupOldReadings); err != nil {
         return err
     }
 
-    // Sync station metadata every hour at :00
-    _, err = s.cron.AddFunc("0 * * * *", s.syncStationMetadata)
-    if err != nil {
+    if _, err := s.cron.AddFunc("0 * * * *", s.syncStationMetadata); err != nil {
         return err
     }
 
-    // Telegram at 07:00, 12:00, 17:00 WIB
     for _, hour := range []int{7, 12, 17} {
         h := hour
-        _, err = s.cron.AddFunc(fmt.Sprintf("0 %d * * *", h), s.sendScheduledReport)
-        if err != nil {
+        if _, err := s.cron.AddFunc(fmt.Sprintf("0 %d * * *", h), s.sendScheduledReport); err != nil {
             return err
         }
     }
 
+    if _, err := s.cron.AddFunc("10 17 * * *", s.sendDailyExcelReport); err != nil {
+        return err
+    }
+
     s.cron.Start()
 
-    log.Println("Scheduler started:")
+    log.Println("Scheduler started (Asia/Jakarta timezone):")
     log.Println("  - Readings sync: every 5 minutes")
-    log.Println("  - Cleanup: every hour at :01")
+    log.Println("  - Cleanup: daily at 00:30 WIB (keeps 24h)")
     log.Println("  - Station sync: every hour at :00")
-    log.Println("  - Telegram: 07:00, 12:00, 17:00 WIB")
+    log.Println("  - Telegram text: 07:00, 12:00, 17:00 WIB")
+    log.Println("  - Daily Excel report: 17:10 WIB")
 
     return nil
 }
@@ -114,7 +129,7 @@ func (s *Scheduler) cleanupOldReadings() {
     }
 
     if deleted > 0 {
-        log.Printf("[Scheduler] Cleaned %d old readings", deleted)
+        log.Printf("[Scheduler] Cleaned %d old readings (kept last %d hours)", deleted, HoursToKeep)
     }
 }
 
@@ -156,5 +171,88 @@ func (s *Scheduler) sendScheduledReport() {
         return
     }
 
-    log.Printf("[Scheduler] Telegram sent (%d stations)", len(results))
+    log.Printf("[Scheduler] Telegram text report sent (%d stations)", len(results))
+}
+
+func (s *Scheduler) sendDailyExcelReport() {
+    if s.telegram == nil {
+        return
+    }
+
+    ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+    defer cancel()
+
+    now := time.Now().In(jakartaLoc)
+
+    // Get all stations for name mapping
+    stations, err := s.stationRepo.GetAll(ctx)
+    if err != nil {
+        log.Printf("[Scheduler] Error fetching stations: %v", err)
+        return
+    }
+
+    stationMap := make(map[string]string)
+    for _, st := range stations {
+        stationMap[st.NamaLokasi] = st.NamaAlat
+    }
+
+    tmaSummary, err := s.readingService.GetDailyTMASummary(ctx, now)
+    if err != nil {
+        log.Printf("[Scheduler] Error fetching TMA summary: %v", err)
+        return
+    }
+
+    debitSnapshots, err := s.readingService.GetDebitSnapshots(ctx, now, []int{7, 12, 17})
+    if err != nil {
+        log.Printf("[Scheduler] Error fetching debit snapshots: %v", err)
+        return
+    }
+
+    var reports []domain.DailyStationReport
+
+    stationNames := make(map[string]bool)
+    for name := range tmaSummary {
+        stationNames[name] = true
+    }
+    for name := range debitSnapshots {
+        stationNames[name] = true
+    }
+
+    for namaLokasi := range stationNames {
+        namaAlat := stationMap[namaLokasi]
+        if namaAlat == "" {
+            namaAlat = namaLokasi
+        }
+
+        report := domain.DailyStationReport{
+            NamaLokasi: namaLokasi,
+            NamaAlat:   util.CleanStationName(namaLokasi, namaAlat),
+        }
+
+        if tma, ok := tmaSummary[namaLokasi]; ok {
+            report.MinTMA = tma.MinTMA
+            report.MaxTMA = tma.MaxTMA
+        }
+
+        if debits, ok := debitSnapshots[namaLokasi]; ok {
+            report.Debit07 = debits[7]
+            report.Debit12 = debits[12]
+            report.Debit17 = debits[17]
+        }
+
+        reports = append(reports, report)
+    }
+
+    excelBuf, filename, err := s.excelService.GenerateDailyReport(reports, now)
+    if err != nil {
+        log.Printf("[Scheduler] Error generating Excel: %v", err)
+        return
+    }
+
+    if err := s.telegram.SendDailyExcelReport(ctx, reports, excelBuf, filename); err != nil {
+        log.Printf("[Scheduler] Error sending daily Excel report: %v", err)
+        return
+    }
+
+    log.Printf("[Scheduler] Daily Excel report sent (%d stations)", len(reports))
 }
