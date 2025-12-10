@@ -310,9 +310,30 @@ Authorization: Bearer <token>
   "h0": -0.25,
   "b": 2.6,
   "tma_min": 0,
-  "tma_max": 2.1
+  "tma_min_inclusive": true,
+  "tma_max": 2.1,
+  "tma_max_inclusive": true
 }
 ```
+### Field semantics
+
+
+- `tma_min` (float)
+Lower bound of valid TMA (in meters).
+
+`tma_min_inclusive` (bool)
+
+`true` → TMA >= `tma_min`\
+`false` → TMA > `tma_min`
+
+- `tma_max` (float)
+Upper bound of valid TMA (in meters).
+
+`tma_max_inclusive` (bool)
+
+`true` → TMA <= `tma_max`\
+`false` → TMA < `tma_max`
+
 
 ---
 
@@ -331,7 +352,9 @@ Authorization: Bearer <token>
   "h0": -0.3,
   "b": 2.5,
   "tma_min": 0,
-  "tma_max": 2.5
+  "tma_min_inclusive": true,
+  "tma_max": 2.1,
+  "tma_max_inclusive": true
 }
 ```
 
