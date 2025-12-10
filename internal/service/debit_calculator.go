@@ -4,6 +4,7 @@ import (
     "context"
     "fmt"
     "math"
+    "sort"
     "sync"
     "time"
 
@@ -13,14 +14,14 @@ import (
 
 type DebitCalculator struct {
     formulaRepo repository.FormulaRepository
-    cache       map[string]*domain.FormulaParams
+    cache       map[string][]domain.FormulaParams // Changed to slice for multiple formulas
     mu          sync.RWMutex
 }
 
 func NewDebitCalculator(repo repository.FormulaRepository) *DebitCalculator {
     return &DebitCalculator{
         formulaRepo: repo,
-        cache:       make(map[string]*domain.FormulaParams),
+        cache:       make(map[string][]domain.FormulaParams),
     }
 }
 
@@ -38,20 +39,28 @@ func (dc *DebitCalculator) Calculate(ctx context.Context, record domain.PDARecor
         CalculatedAt: time.Now(),
     }
 
-    params, err := dc.getParams(ctx, record.NamaLokasi)
-    if err != nil {
+    formulas, err := dc.getParams(ctx, record.NamaLokasi)
+    if err != nil || len(formulas) == 0 {
         result.IsValid = false
         result.Debit = 0
         return result, nil
     }
 
-    if !params.Validate(record.TMA) {
+    var matchedFormula *domain.FormulaParams
+    for i := range formulas {
+        if formulas[i].Validate(record.TMA) {
+            matchedFormula = &formulas[i]
+            break
+        }
+    }
+
+    if matchedFormula == nil {
         result.IsValid = false
         result.Debit = 0
         return result, nil
     }
 
-    base := record.TMA - params.H0
+    base := record.TMA - matchedFormula.H0
 
     if base < 0 {
         result.IsValid = false
@@ -59,10 +68,37 @@ func (dc *DebitCalculator) Calculate(ctx context.Context, record domain.PDARecor
         return result, nil
     }
 
-    result.Debit = params.C * math.Pow(base, params.B)
+    result.Debit = matchedFormula.C * math.Pow(base, matchedFormula.B)
     result.IsValid = true
 
     return result, nil
+}
+
+func (dc *DebitCalculator) CalculateWithTMA(ctx context.Context, namaLokasi string, tma float64) (float64, bool, error) {
+    formulas, err := dc.getParams(ctx, namaLokasi)
+    if err != nil || len(formulas) == 0 {
+        return 0, false, nil
+    }
+
+    var matchedFormula *domain.FormulaParams
+    for i := range formulas {
+        if formulas[i].Validate(tma) {
+            matchedFormula = &formulas[i]
+            break
+        }
+    }
+
+    if matchedFormula == nil {
+        return 0, false, nil
+    }
+
+    base := tma - matchedFormula.H0
+    if base < 0 {
+        return 0, false, nil
+    }
+
+    debit := matchedFormula.C * math.Pow(base, matchedFormula.B)
+    return debit, true, nil
 }
 
 func (dc *DebitCalculator) CalculateBatch(ctx context.Context, records []domain.PDARecord) ([]domain.DebitResult, error) {
@@ -79,24 +115,32 @@ func (dc *DebitCalculator) CalculateBatch(ctx context.Context, records []domain.
     return results, nil
 }
 
-func (dc *DebitCalculator) getParams(ctx context.Context, namaLokasi string) (*domain.FormulaParams, error) {
+func (dc *DebitCalculator) getParams(ctx context.Context, namaLokasi string) ([]domain.FormulaParams, error) {
     dc.mu.RLock()
-    if params, ok := dc.cache[namaLokasi]; ok {
+    if formulas, ok := dc.cache[namaLokasi]; ok {
         dc.mu.RUnlock()
-        return params, nil
+        return formulas, nil
     }
     dc.mu.RUnlock()
 
-    params, err := dc.formulaRepo.GetByNamaLokasi(ctx, namaLokasi)
+    formulas, err := dc.formulaRepo.GetAllByNamaLokasi(ctx, namaLokasi)
     if err != nil {
-        return nil, fmt.Errorf("formula not found for %s: %w", namaLokasi, err)
+        return nil, fmt.Errorf("formulas not found for %s: %w", namaLokasi, err)
     }
 
+    if len(formulas) == 0 {
+        return nil, fmt.Errorf("no formulas found for %s", namaLokasi)
+    }
+
+    sort.Slice(formulas, func(i, j int) bool {
+        return formulas[i].Priority > formulas[j].Priority
+    })
+
     dc.mu.Lock()
-    dc.cache[namaLokasi] = params
+    dc.cache[namaLokasi] = formulas
     dc.mu.Unlock()
 
-    return params, nil
+    return formulas, nil
 }
 
 func (dc *DebitCalculator) RefreshCache(ctx context.Context) error {
@@ -108,9 +152,17 @@ func (dc *DebitCalculator) RefreshCache(ctx context.Context) error {
     dc.mu.Lock()
     defer dc.mu.Unlock()
 
-    dc.cache = make(map[string]*domain.FormulaParams)
-    for i := range params {
-        dc.cache[params[i].NamaLokasi] = &params[i]
+    dc.cache = make(map[string][]domain.FormulaParams)
+    for _, p := range params {
+        dc.cache[p.NamaLokasi] = append(dc.cache[p.NamaLokasi], p)
+    }
+
+    for namaLokasi := range dc.cache {
+        formulas := dc.cache[namaLokasi]
+        sort.Slice(formulas, func(i, j int) bool {
+            return formulas[i].Priority > formulas[j].Priority
+        })
+        dc.cache[namaLokasi] = formulas
     }
 
     return nil
@@ -120,4 +172,8 @@ func (dc *DebitCalculator) InvalidateCache(namaLokasi string) {
     dc.mu.Lock()
     defer dc.mu.Unlock()
     delete(dc.cache, namaLokasi)
+}
+
+func (dc *DebitCalculator) GetFormulasForStation(ctx context.Context, namaLokasi string) ([]domain.FormulaParams, error) {
+    return dc.getParams(ctx, namaLokasi)
 }

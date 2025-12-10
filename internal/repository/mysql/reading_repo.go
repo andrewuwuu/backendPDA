@@ -196,6 +196,33 @@ func (r *ReadingRepo) GetDebitAtHours(ctx context.Context, date time.Time, hours
     return snapshots, nil
 }
 
+func (r *ReadingRepo) GetReadingsByTimeRange(ctx context.Context, namaLokasi string, from, to time.Time) ([]domain.HourlyReading, error) {
+    var readings []domain.HourlyReading
+    
+    query := `
+        SELECT * FROM hourly_readings 
+        WHERE nama_lokasi = ? 
+        AND recorded_at >= ? 
+        AND recorded_at <= ?
+        ORDER BY recorded_at ASC`
+    
+    err := r.db.SelectContext(ctx, &readings, query, namaLokasi, from, to)
+    return readings, err
+}
+
+func (r *ReadingRepo) GetAllReadingsByTimeRange(ctx context.Context, from, to time.Time) ([]domain.HourlyReading, error) {
+    var readings []domain.HourlyReading
+    
+    query := `
+        SELECT * FROM hourly_readings 
+        WHERE recorded_at >= ? 
+        AND recorded_at <= ?
+        ORDER BY nama_lokasi, recorded_at ASC`
+    
+    err := r.db.SelectContext(ctx, &readings, query, from, to)
+    return readings, err
+}
+
 func truncateToHour(t time.Time) time.Time {
     return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, t.Location())
 }

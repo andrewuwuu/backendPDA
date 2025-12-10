@@ -126,6 +126,34 @@ func (s *ReadingService) GetDebitSnapshots(ctx context.Context, date time.Time, 
     return result, nil
 }
 
+func (s *ReadingService) GetReadingsByTimeRange(ctx context.Context, namaLokasi string, from, to time.Time) ([]domain.HourlyReading, error) {
+    return s.readingRepo.GetReadingsByTimeRange(ctx, namaLokasi, from, to)
+}
+
+func (s *ReadingService) GetAllReadingsByTimeRange(ctx context.Context, from, to time.Time) ([]domain.HourlyReading, error) {
+    return s.readingRepo.GetAllReadingsByTimeRange(ctx, from, to)
+}
+
+func (s *ReadingService) RecalculateDebit(ctx context.Context, namaLokasi string) error {
+    readings, err := s.readingRepo.GetCurrentHourByStation(ctx, namaLokasi)
+    if err != nil {
+        return err
+    }
+
+    for i := range readings {
+        debit, valid, _ := s.calculator.CalculateWithTMA(ctx, readings[i].NamaLokasi, readings[i].TMA)
+        if valid {
+            readings[i].Debit = &debit
+            readings[i].IsValid = true
+        } else {
+            readings[i].Debit = nil
+            readings[i].IsValid = false
+        }
+    }
+
+    return s.readingRepo.BulkInsertReadings(ctx, readings)
+}
+
 func truncateToHour(t time.Time) time.Time {
     return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, t.Location())
 }

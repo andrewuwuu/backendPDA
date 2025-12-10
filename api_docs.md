@@ -200,6 +200,45 @@ Authorization: Bearer <token>
 
 ---
 
+### Get Historical Readings
+
+```
+GET /readings/historical?from=2025-12-01T00:00:00&to=2025-12-03T23:59:59&nama_lokasi=pdapengubuan
+Authorization: Bearer <token>
+```
+
+**Parameters:**
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| from | datetime/date | Yes | Start time (`YYYY-MM-DDTHH:MM:SS` or `YYYY-MM-DD`) |
+| to | datetime/date | Yes | End time (`YYYY-MM-DDTHH:MM:SS` or `YYYY-MM-DD`) |
+| nama_lokasi | string | No | Filter by station (omit for all stations) |
+
+**Response:**
+```json
+{
+  "from": "2025-12-01T00:00:00Z",
+  "to": "2025-12-03T23:59:59Z",
+  "nama_lokasi": "pdapengubuan",
+  "reading_count": 144,
+  "readings": [
+    {
+      "id": 1,
+      "nama_lokasi": "pdapengubuan",
+      "hour_bucket": "2025-12-01T07:00:00Z",
+      "recorded_at": "2025-12-01T07:05:00Z",
+      "w_level": 150.5,
+      "tma": 1.505,
+      "debit": 45.234,
+      "is_valid": true,
+      "rain": 0
+    }
+  ]
+}
+```
+
+---
+
 ## Stations
 
 ### Get All Stations
@@ -257,7 +296,11 @@ Authorization: Bearer <token>
 
 ## Formulas
 
-### Get All Formulas
+> **Debit Formula:** $Q = C \times (TMA - H_0)^B$
+>
+> A station can have **multiple formulas** with different TMA ranges (piecewise rating curve). The formula with the highest `priority` that matches the TMA value is used.
+
+### Get All Formulas (Flat List)
 
 ```
 GET /formulas
@@ -275,26 +318,141 @@ Authorization: Bearer <token>
     "h0": -0.25,
     "b": 2.6,
     "tma_min": 0,
-    "tma_max": 2.1,
+    "tma_min_inclusive": true,
+    "tma_max": 1.5,
+    "tma_max_inclusive": false,
+    "priority": 10,
+    "updated_at": "2025-12-01T00:00:00Z"
+  },
+  {
+    "id": 2,
+    "nama_lokasi": "pdapengubuan",
+    "station_name": "PDA 143",
+    "c": 22.5,
+    "h0": -0.15,
+    "b": 2.2,
+    "tma_min": 1.5,
+    "tma_min_inclusive": true,
+    "tma_max": 3.0,
+    "tma_max_inclusive": true,
+    "priority": 5,
     "updated_at": "2025-12-01T00:00:00Z"
   }
 ]
 ```
 
-> **Formula:** `Q = C × (TMA - H₀)^B`
+---
+
+### Get All Formulas (Grouped by Station)
+
+```
+GET /formulas/grouped
+Authorization: Bearer <token>
+```
+
+**Response:**
+```json
+[
+  {
+    "nama_lokasi": "pdapengubuan",
+    "station_name": "PDA 143",
+    "formulas": [
+      {
+        "id": 1,
+        "nama_lokasi": "pdapengubuan",
+        "station_name": "PDA 143",
+        "c": 15.376,
+        "h0": -0.25,
+        "b": 2.6,
+        "tma_min": 0,
+        "tma_min_inclusive": true,
+        "tma_max": 1.5,
+        "tma_max_inclusive": false,
+        "priority": 10,
+        "updated_at": "2025-12-01T00:00:00Z"
+      },
+      {
+        "id": 2,
+        "nama_lokasi": "pdapengubuan",
+        "station_name": "PDA 143",
+        "c": 22.5,
+        "h0": -0.15,
+        "b": 2.2,
+        "tma_min": 1.5,
+        "tma_min_inclusive": true,
+        "tma_max": 3.0,
+        "tma_max_inclusive": true,
+        "priority": 5,
+        "updated_at": "2025-12-01T00:00:00Z"
+      }
+    ]
+  }
+]
+```
 
 ---
 
-### Get Single Formula
+### Get Formulas by Station
 
 ```
 GET /formulas/{namaLokasi}
 Authorization: Bearer <token>
 ```
 
+**Response:**
+```json
+{
+  "nama_lokasi": "pdapengubuan",
+  "station_name": "PDA 143",
+  "formulas": [
+    {
+      "id": 1,
+      "nama_lokasi": "pdapengubuan",
+      "station_name": "PDA 143",
+      "c": 15.376,
+      "h0": -0.25,
+      "b": 2.6,
+      "tma_min": 0,
+      "tma_min_inclusive": true,
+      "tma_max": 1.5,
+      "tma_max_inclusive": false,
+      "priority": 10,
+      "updated_at": "2025-12-01T00:00:00Z"
+    }
+  ]
+}
+```
+
 ---
 
-### Create Formula (Admin Only)
+### Get Formula by ID
+
+```
+GET /formulas/id/{id}
+Authorization: Bearer <token>
+```
+
+**Response:**
+```json
+{
+  "id": 1,
+  "nama_lokasi": "pdapengubuan",
+  "station_name": "PDA 143",
+  "c": 15.376,
+  "h0": -0.25,
+  "b": 2.6,
+  "tma_min": 0,
+  "tma_min_inclusive": true,
+  "tma_max": 1.5,
+  "tma_max_inclusive": false,
+  "priority": 10,
+  "updated_at": "2025-12-01T00:00:00Z"
+}
+```
+
+---
+
+### Create Formulas for Station (Admin Only)
 
 ```
 POST /formulas
@@ -306,61 +464,143 @@ Authorization: Bearer <token>
 {
   "nama_lokasi": "pda_new",
   "station_name": "PDA New Station",
-  "c": 15.376,
-  "h0": -0.25,
-  "b": 2.6,
-  "tma_min": 0,
-  "tma_min_inclusive": true,
-  "tma_max": 2.1,
-  "tma_max_inclusive": true
+  "formulas": [
+    {
+      "c": 15.376,
+      "h0": -0.25,
+      "b": 2.6,
+      "tma_min": 0,
+      "tma_min_inclusive": true,
+      "tma_max": 1.5,
+      "tma_max_inclusive": false,
+      "priority": 10
+    },
+    {
+      "c": 22.5,
+      "h0": -0.15,
+      "b": 2.2,
+      "tma_min": 1.5,
+      "tma_min_inclusive": true,
+      "tma_max": 3.0,
+      "tma_max_inclusive": true,
+      "priority": 5
+    }
+  ]
 }
 ```
-### Field semantics
 
-
-- `tma_min` (float)
-Lower bound of valid TMA (in meters).
-
-`tma_min_inclusive` (bool)
-
-`true` → TMA >= `tma_min`\
-`false` → TMA > `tma_min`
-
-- `tma_max` (float)
-Upper bound of valid TMA (in meters).
-
-`tma_max_inclusive` (bool)
-
-`true` → TMA <= `tma_max`\
-`false` → TMA < `tma_max`
-
+**Response:**
+```json
+{
+  "status": "created",
+  "nama_lokasi": "pda_new",
+  "count": 2,
+  "formulas": [
+    {
+      "id": 10,
+      "nama_lokasi": "pda_new",
+      "station_name": "PDA New Station",
+      "c": 15.376,
+      "h0": -0.25,
+      "b": 2.6,
+      "tma_min": 0,
+      "tma_min_inclusive": true,
+      "tma_max": 1.5,
+      "tma_max_inclusive": false,
+      "priority": 10,
+      "updated_at": "2025-12-03T07:00:00Z"
+    },
+    {
+      "id": 11,
+      "nama_lokasi": "pda_new",
+      "station_name": "PDA New Station",
+      "c": 22.5,
+      "h0": -0.15,
+      "b": 2.2,
+      "tma_min": 1.5,
+      "tma_min_inclusive": true,
+      "tma_max": 3.0,
+      "tma_max_inclusive": true,
+      "priority": 5,
+      "updated_at": "2025-12-03T07:00:00Z"
+    }
+  ]
+}
+```
 
 ---
 
-### Update Formula (Admin Only)
+### Replace All Formulas for Station (Admin Only)
 
 ```
 PUT /formulas/{namaLokasi}
 Authorization: Bearer <token>
 ```
 
+> **Note:** This replaces ALL existing formulas for the station.
+
 **Request:**
 ```json
 {
   "station_name": "PDA 143 Updated",
-  "c": 16.0,
-  "h0": -0.3,
-  "b": 2.5,
-  "tma_min": 0,
-  "tma_min_inclusive": true,
-  "tma_max": 2.1,
-  "tma_max_inclusive": true
+  "formulas": [
+    {
+      "c": 16.0,
+      "h0": -0.3,
+      "b": 2.5,
+      "tma_min": 0,
+      "tma_min_inclusive": true,
+      "tma_max": 2.0,
+      "tma_max_inclusive": true,
+      "priority": 10
+    }
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "status": "updated",
+  "nama_lokasi": "pdapengubuan",
+  "count": 1
 }
 ```
 
 ---
 
-### Delete Formula (Admin Only)
+### Update Single Formula by ID (Admin Only)
+
+```
+PUT /formulas/id/{id}
+Authorization: Bearer <token>
+```
+
+**Request:**
+```json
+{
+  "station_name": "PDA 143",
+  "c": 16.5,
+  "h0": -0.28,
+  "b": 2.55,
+  "tma_min": 0,
+  "tma_min_inclusive": true,
+  "tma_max": 1.8,
+  "tma_max_inclusive": false,
+  "priority": 10
+}
+```
+
+**Response:**
+```json
+{
+  "status": "updated"
+}
+```
+
+---
+
+### Delete All Formulas for Station (Admin Only)
 
 ```
 DELETE /formulas/{namaLokasi}
@@ -368,6 +608,49 @@ Authorization: Bearer <token>
 ```
 
 **Response:** `204 No Content`
+
+---
+
+### Delete Single Formula by ID (Admin Only)
+
+```
+DELETE /formulas/id/{id}
+Authorization: Bearer <token>
+```
+
+**Response:** `204 No Content`
+
+---
+
+### Formula Field Reference
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | int | Unique formula ID |
+| `nama_lokasi` | string | Station location ID |
+| `station_name` | string | Human-readable station name |
+| `c` | float | Coefficient C in formula |
+| `h0` | float | Zero-flow level H₀ (meters) |
+| `b` | float | Exponent B in formula |
+| `tma_min` | float | Lower bound of valid TMA (meters) |
+| `tma_min_inclusive` | bool | `true`: TMA ≥ tma_min, `false`: TMA > tma_min |
+| `tma_max` | float | Upper bound of valid TMA (meters) |
+| `tma_max_inclusive` | bool | `true`: TMA ≤ tma_max, `false`: TMA < tma_max |
+| `priority` | int | Selection priority (higher = checked first) |
+| `updated_at` | datetime | Last update timestamp |
+
+### Formula Selection Logic
+
+1. Formulas are sorted by `priority` (descending)
+2. For a given TMA, the **first formula** where TMA falls within the valid range is used
+3. If no formula matches, `debit` will be `null` and `is_valid` will be `false`
+
+**Example:** Station with two formulas:
+- Formula A: `tma_min=0`, `tma_max=1.5`, `priority=10`
+- Formula B: `tma_min=1.5`, `tma_max=3.0`, `priority=5`
+
+For TMA = 1.2 → Formula A is used
+For TMA = 2.0 → Formula B is used
 
 ---
 
@@ -380,7 +663,7 @@ GET /reports/export
 Authorization: Bearer <token>
 ```
 
-**Response:** Downloads `Debit_Report_YYYY-MM-DD_HH-MM.xlsx`
+**Response:** Downloads `Laporan_Debit_YYYY-MM-DD_HH-MM.xlsx`
 
 ---
 
@@ -436,23 +719,34 @@ All errors return:
 
 ## Quick Reference
 
-| Endpoint | Method | Auth | Role |
-|----------|--------|------|------|
-| `/auth/login` | POST | ❌ | - |
-| `/pda/realtime` | GET | ✅ | user |
-| `/pda/historical` | GET | ✅ | user |
-| `/readings/current` | GET | ✅ | user |
-| `/readings/current/summary` | GET | ✅ | user |
-| `/readings/current/latest` | GET | ✅ | user |
-| `/readings/station/{id}` | GET | ✅ | user |
-| `/stations` | GET | ✅ | user |
-| `/stations/{id}` | GET | ✅ | user |
-| `/stations/sync` | POST | ✅ | user |
-| `/formulas` | GET | ✅ | user |
-| `/formulas` | POST | ✅ | admin |
-| `/formulas/{id}` | GET | ✅ | user |
-| `/formulas/{id}` | PUT | ✅ | admin |
-| `/formulas/{id}` | DELETE | ✅ | admin |
-| `/reports/export` | GET | ✅ | user |
-| `/debug/jwt` | GET | ✅ | admin |
-| `/health` | GET | ❌ | - |
+| Endpoint | Method | Auth | Role | Description |
+|----------|--------|------|------|-------------|
+| `/auth/login` | POST | ❌ | - | Login |
+| `/health` | GET | ❌ | - | Health check |
+| **PDA Data** |
+| `/pda/realtime` | GET | ✅ | user | Realtime data with debit |
+| `/pda/historical` | GET | ✅ | user | Historical data with debit |
+| **Readings** |
+| `/readings/current` | GET | ✅ | user | Current hour readings |
+| `/readings/current/summary` | GET | ✅ | user | Current hour summary |
+| `/readings/current/latest` | GET | ✅ | user | Latest reading per station |
+| `/readings/station/{namaLokasi}` | GET | ✅ | user | Station readings |
+| `/readings/historical` | GET | ✅ | user | Historical readings |
+| **Stations** |
+| `/stations` | GET | ✅ | user | List all stations |
+| `/stations/{namaLokasi}` | GET | ✅ | user | Get single station |
+| `/stations/sync` | POST | ✅ | user | Sync stations from telemetry |
+| **Formulas** |
+| `/formulas` | GET | ✅ | user | List all formulas (flat) |
+| `/formulas/grouped` | GET | ✅ | user | List formulas grouped by station |
+| `/formulas/{namaLokasi}` | GET | ✅ | user | Get formulas for station |
+| `/formulas/id/{id}` | GET | ✅ | user | Get single formula by ID |
+| `/formulas` | POST | ✅ | **admin** | Create formulas for station |
+| `/formulas/{namaLokasi}` | PUT | ✅ | **admin** | Replace all formulas for station |
+| `/formulas/{namaLokasi}` | DELETE | ✅ | **admin** | Delete all formulas for station |
+| `/formulas/id/{id}` | PUT | ✅ | **admin** | Update single formula |
+| `/formulas/id/{id}` | DELETE | ✅ | **admin** | Delete single formula |
+| **Reports** |
+| `/reports/export` | GET | ✅ | user | Export Excel report |
+| **Debug** |
+| `/debug/jwt` | GET | ✅ | **admin** | JWT debug info |
