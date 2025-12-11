@@ -52,3 +52,12 @@ type UserRepository interface {
     Create(ctx context.Context, user *domain.User, password string) error
     ValidatePassword(user *domain.User, password string) bool
 }
+
+type AlertLevelRepository interface {
+    GetByNamaLokasi(ctx context.Context, namaLokasi string) (*domain.StationAlertLevel, error)
+    GetAll(ctx context.Context) ([]domain.StationAlertLevel, error)
+    GetByAlertLevel(ctx context.Context, level domain.AlertLevel) ([]domain.StationAlertLevel, error)
+    Upsert(ctx context.Context, alert *domain.StationAlertLevel) error
+    UpsertBatch(ctx context.Context, alerts []domain.StationAlertLevel) error
+    Delete(ctx context.Context, namaLokasi string) error
+}

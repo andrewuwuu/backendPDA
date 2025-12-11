@@ -654,6 +654,180 @@ For TMA = 2.0 → Formula B is used
 
 ---
 
+## Alert Levels
+
+> **Alert Levels** track the current status of each station: `normal`, `siaga`, `waspada`, or `awas`.
+
+### Get All Alert Levels
+
+```
+GET /alert-levels
+Authorization: Bearer <token>
+```
+
+**Response:**
+```json
+{
+  "count": 3,
+  "alert_levels": [
+    {
+      "id": 1,
+      "nama_lokasi": "pdapengubuan",
+      "alert_level": "normal",
+      "updated_by": "admin",
+      "updated_at": "2025-12-03T07:00:00Z",
+      "created_at": "2025-12-01T00:00:00Z"
+    }
+  ]
+}
+```
+
+---
+
+### Get Alert Level by Station
+
+```
+GET /alert-levels/{namaLokasi}
+Authorization: Bearer <token>
+```
+
+**Response (if set):**
+```json
+{
+  "id": 1,
+  "nama_lokasi": "pdapengubuan",
+  "alert_level": "siaga",
+  "updated_by": "admin",
+  "updated_at": "2025-12-03T07:00:00Z",
+  "created_at": "2025-12-01T00:00:00Z"
+}
+```
+
+**Response (if not set):**
+```json
+{
+  "nama_lokasi": "pdapengubuan",
+  "alert_level": "normal",
+  "message": "no custom alert level set, defaulting to normal"
+}
+```
+
+---
+
+### Filter Stations by Alert Level
+
+```
+GET /alert-levels/filter/{level}
+Authorization: Bearer <token>
+```
+
+**Parameters:**
+| Param | Type | Required | Description |
+|-------|------|----------|-------------|
+| level | string | Yes | One of: `normal`, `siaga`, `waspada`, `awas` |
+
+**Response:**
+```json
+{
+  "level": "siaga",
+  "count": 2,
+  "alert_levels": [
+    {
+      "id": 1,
+      "nama_lokasi": "pdapengubuan",
+      "alert_level": "siaga",
+      "updated_by": "admin",
+      "updated_at": "2025-12-03T07:00:00Z",
+      "created_at": "2025-12-01T00:00:00Z"
+    }
+  ]
+}
+```
+
+---
+
+### Update Alert Level (Admin Only)
+
+```
+PUT /alert-levels/{namaLokasi}
+Authorization: Bearer <token>
+```
+
+**Request:**
+```json
+{
+  "alert_level": "siaga"
+}
+```
+
+**Response:**
+```json
+{
+  "status": "updated",
+  "nama_lokasi": "pdapengubuan",
+  "alert_level": "siaga",
+  "updated_by": "admin"
+}
+```
+
+---
+
+### Bulk Update Alert Levels (Admin Only)
+
+```
+PUT /alert-levels
+Authorization: Bearer <token>
+```
+
+**Request:**
+```json
+{
+  "updates": [
+    {
+      "nama_lokasi": "pdapengubuan",
+      "alert_level": "siaga"
+    },
+    {
+      "nama_lokasi": "pdaargoguruh",
+      "alert_level": "waspada"
+    }
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "status": "updated",
+  "count": 2,
+  "updated_by": "admin"
+}
+```
+
+---
+
+### Delete Alert Level (Admin Only)
+
+```
+DELETE /alert-levels/{namaLokasi}
+Authorization: Bearer <token>
+```
+
+**Response:** `204 No Content`
+
+---
+
+### Alert Level Values
+
+| Value | Description |
+|-------|-------------|
+| `normal` | Normal conditions (default) |
+| `siaga` | Alert level 1 - Caution |
+| `waspada` | Alert level 2 - Warning |
+| `awas` | Alert level 3 - Danger |
+
+---
+
 ## Reports
 
 ### Export Excel Report
@@ -746,6 +920,13 @@ All errors return:
 | `/formulas/{namaLokasi}` | DELETE | ✅ | **admin** | Delete all formulas for station |
 | `/formulas/id/{id}` | PUT | ✅ | **admin** | Update single formula |
 | `/formulas/id/{id}` | DELETE | ✅ | **admin** | Delete single formula |
+| **Alert Levels** |
+| `/alert-levels` | GET | ✅ | user | List all alert levels |
+| `/alert-levels/{namaLokasi}` | GET | ✅ | user | Get station alert level |
+| `/alert-levels/filter/{level}` | GET | ✅ | user | Filter by alert level |
+| `/alert-levels/{namaLokasi}` | PUT | ✅ | **admin** | Update station alert level |
+| `/alert-levels` | PUT | ✅ | **admin** | Bulk update alert levels |
+| `/alert-levels/{namaLokasi}` | DELETE | ✅ | **admin** | Delete station alert level |
 | **Reports** |
 | `/reports/export` | GET | ✅ | user | Export Excel report |
 | **Debug** |

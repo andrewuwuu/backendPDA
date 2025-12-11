@@ -44,6 +44,7 @@ Lightweight Go-based telemetry monitor that ingests third-party telemetry data, 
 │   ├── config/
 │   │   └── config.go
 │   ├── domain/
+│   │   ├── alert_level.go
 │   │   ├── formula.go
 │   │   ├── reading.go
 │   │   ├── station.go
@@ -63,6 +64,7 @@ Lightweight Go-based telemetry monitor that ingests third-party telemetry data, 
 │   ├── repository/
 │   │   ├── interfaces.go
 │   │   └── mysql/
+│   │       ├── alert_level_repo.go
 │   │       ├── formula_repo.go
 │   │       ├── reading_repo.go
 │   │       ├── station_repo.go
