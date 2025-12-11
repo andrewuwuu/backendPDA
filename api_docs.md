@@ -841,6 +841,26 @@ Authorization: Bearer <token>
 
 ---
 
+### Export Weekly Reports (Last 7 Days)
+
+```
+GET /reports/export/weekly
+Authorization: Bearer <token>
+```
+
+**Response:** Downloads `weekly_reports_YYYY-MM-DD.zip`
+
+The ZIP file contains 7 Excel files, one for each of the last 7 days:
+- `laporan_harian_YYYY-MM-DD.xlsx` (today)
+- `laporan_harian_YYYY-MM-DD.xlsx` (yesterday)
+- ... (5 more days)
+
+Each Excel file contains the daily report with:
+- Debit readings at 07:00, 12:00, and 17:00
+- Min/Max TMA values for the day
+
+---
+
 ## Debug (Admin Only)
 
 ### Get JWT Info
@@ -929,5 +949,6 @@ All errors return:
 | `/alert-levels/{namaLokasi}` | DELETE | ✅ | **admin** | Delete station alert level |
 | **Reports** |
 | `/reports/export` | GET | ✅ | user | Export Excel report |
+| `/reports/export/weekly` | GET | ✅ | user | Export weekly reports (ZIP with 7 days) |
 | **Debug** |
 | `/debug/jwt` | GET | ✅ | **admin** | JWT debug info |

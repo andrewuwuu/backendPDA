@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"archive/zip"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -98,6 +100,7 @@ func (h *APIHandler) RegisterRoutes(r *mux.Router) {
 	adminRoutes.HandleFunc("/alert-levels/{namaLokasi}", h.DeleteAlertLevel).Methods("DELETE")
 
 	protected.HandleFunc("/reports/export", h.ExportReport).Methods("GET")
+	protected.HandleFunc("/reports/export/weekly", h.ExportWeeklyReports).Methods("GET")
 
 	adminRoutes.HandleFunc("/debug/jwt", h.GetJWTInfo).Methods("GET")
 }
@@ -163,6 +166,92 @@ func (h *APIHandler) ExportReport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 	w.Header().Set("Content-Disposition", "attachment; filename="+filename)
 	w.Write(buf.Bytes())
+}
+
+func (h *APIHandler) ExportWeeklyReports(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	loc, err := time.LoadLocation("Asia/Jakarta")
+	if err != nil {
+		loc = time.FixedZone("WIB", 7*60*60)
+	}
+
+	now := time.Now().In(loc)
+
+	stations, err := h.stationRepo.GetAll(ctx)
+	if err != nil {
+		h.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	stationMap := make(map[string]string)
+	for _, st := range stations {
+		stationMap[st.NamaLokasi] = st.NamaAlat
+	}
+
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=weekly_reports_%s.zip", now.Format("2006-01-02")))
+
+	zipWriter := zip.NewWriter(w)
+	defer zipWriter.Close()
+
+	for i := 0; i < 7; i++ {
+		reportDate := now.AddDate(0, 0, -i)
+
+		tmaSummary, err := h.readingService.GetDailyTMASummary(ctx, reportDate)
+		if err != nil {
+			continue
+		}
+
+		debitSnapshots, err := h.readingService.GetDebitSnapshots(ctx, reportDate, []int{7, 12, 17})
+		if err != nil {
+			continue
+		}
+
+		stationNames := make(map[string]bool)
+		for name := range tmaSummary {
+			stationNames[name] = true
+		}
+		for name := range debitSnapshots {
+			stationNames[name] = true
+		}
+
+		var reports []domain.DailyStationReport
+		for namaLokasi := range stationNames {
+			namaAlat := stationMap[namaLokasi]
+			if namaAlat == "" {
+				namaAlat = namaLokasi
+			}
+
+			report := domain.DailyStationReport{
+				NamaLokasi: namaLokasi,
+				NamaAlat:   namaAlat,
+			}
+
+			if tma, ok := tmaSummary[namaLokasi]; ok {
+				report.MinTMA = tma.MinTMA
+				report.MaxTMA = tma.MaxTMA
+			}
+
+			if debits, ok := debitSnapshots[namaLokasi]; ok {
+				report.Debit07 = debits[7]
+				report.Debit12 = debits[12]
+				report.Debit17 = debits[17]
+			}
+
+			reports = append(reports, report)
+		}
+
+		excelBuf, filename, err := h.excelService.GenerateDailyReport(reports, reportDate)
+		if err != nil {
+			continue
+		}
+
+		zipFile, err := zipWriter.Create(filename)
+		if err != nil {
+			continue
+		}
+		zipFile.Write(excelBuf.Bytes())
+	}
 }
 
 func (h *APIHandler) GetCurrentHourReadings(w http.ResponseWriter, r *http.Request) {
