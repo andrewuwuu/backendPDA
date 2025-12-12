@@ -20,7 +20,9 @@ func NewAlertLevelRepo(db *sqlx.DB) *AlertLevelRepo {
 
 func (r *AlertLevelRepo) GetByNamaLokasi(ctx context.Context, namaLokasi string) (*domain.StationAlertLevel, error) {
 	var alert domain.StationAlertLevel
-	query := `SELECT id, nama_lokasi, alert_level, updated_by, updated_at, created_at 
+	query := `SELECT id, nama_lokasi, alert_level, 
+              upper_limit_normal, upper_limit_siaga, upper_limit_waspada, upper_limit_awas,
+              updated_by, updated_at, created_at 
               FROM station_alert_levels WHERE nama_lokasi = ?`
 
 	err := r.db.GetContext(ctx, &alert, query, namaLokasi)
@@ -35,7 +37,9 @@ func (r *AlertLevelRepo) GetByNamaLokasi(ctx context.Context, namaLokasi string)
 
 func (r *AlertLevelRepo) GetAll(ctx context.Context) ([]domain.StationAlertLevel, error) {
 	var alerts []domain.StationAlertLevel
-	query := `SELECT id, nama_lokasi, alert_level, updated_by, updated_at, created_at 
+	query := `SELECT id, nama_lokasi, alert_level,
+              upper_limit_normal, upper_limit_siaga, upper_limit_waspada, upper_limit_awas,
+              updated_by, updated_at, created_at 
               FROM station_alert_levels ORDER BY nama_lokasi`
 	err := r.db.SelectContext(ctx, &alerts, query)
 	return alerts, err
@@ -43,7 +47,9 @@ func (r *AlertLevelRepo) GetAll(ctx context.Context) ([]domain.StationAlertLevel
 
 func (r *AlertLevelRepo) GetByAlertLevel(ctx context.Context, level domain.AlertLevel) ([]domain.StationAlertLevel, error) {
 	var alerts []domain.StationAlertLevel
-	query := `SELECT id, nama_lokasi, alert_level, updated_by, updated_at, created_at 
+	query := `SELECT id, nama_lokasi, alert_level,
+              upper_limit_normal, upper_limit_siaga, upper_limit_waspada, upper_limit_awas,
+              updated_by, updated_at, created_at 
               FROM station_alert_levels WHERE alert_level = ? ORDER BY nama_lokasi`
 	err := r.db.SelectContext(ctx, &alerts, query, level)
 	return alerts, err
@@ -51,13 +57,20 @@ func (r *AlertLevelRepo) GetByAlertLevel(ctx context.Context, level domain.Alert
 
 func (r *AlertLevelRepo) Upsert(ctx context.Context, alert *domain.StationAlertLevel) error {
 	query := `
-        INSERT INTO station_alert_levels (nama_lokasi, alert_level, updated_by)
-        VALUES (?, ?, ?)
+        INSERT INTO station_alert_levels (nama_lokasi, alert_level, 
+            upper_limit_normal, upper_limit_siaga, upper_limit_waspada, upper_limit_awas, updated_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
             alert_level = VALUES(alert_level),
+            upper_limit_normal = VALUES(upper_limit_normal),
+            upper_limit_siaga = VALUES(upper_limit_siaga),
+            upper_limit_waspada = VALUES(upper_limit_waspada),
+            upper_limit_awas = VALUES(upper_limit_awas),
             updated_by = VALUES(updated_by)`
 
-	result, err := r.db.ExecContext(ctx, query, alert.NamaLokasi, alert.AlertLevel, alert.UpdatedBy)
+	result, err := r.db.ExecContext(ctx, query, alert.NamaLokasi, alert.AlertLevel,
+		alert.UpperLimitNormal, alert.UpperLimitSiaga, alert.UpperLimitWaspada, alert.UpperLimitAwas,
+		alert.UpdatedBy)
 	if err != nil {
 		return err
 	}
@@ -81,14 +94,21 @@ func (r *AlertLevelRepo) UpsertBatch(ctx context.Context, alerts []domain.Statio
 	defer tx.Rollback()
 
 	query := `
-        INSERT INTO station_alert_levels (nama_lokasi, alert_level, updated_by)
-        VALUES (?, ?, ?)
+        INSERT INTO station_alert_levels (nama_lokasi, alert_level,
+            upper_limit_normal, upper_limit_siaga, upper_limit_waspada, upper_limit_awas, updated_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
             alert_level = VALUES(alert_level),
+            upper_limit_normal = VALUES(upper_limit_normal),
+            upper_limit_siaga = VALUES(upper_limit_siaga),
+            upper_limit_waspada = VALUES(upper_limit_waspada),
+            upper_limit_awas = VALUES(upper_limit_awas),
             updated_by = VALUES(updated_by)`
 
 	for _, alert := range alerts {
-		if _, err := tx.ExecContext(ctx, query, alert.NamaLokasi, alert.AlertLevel, alert.UpdatedBy); err != nil {
+		if _, err := tx.ExecContext(ctx, query, alert.NamaLokasi, alert.AlertLevel,
+			alert.UpperLimitNormal, alert.UpperLimitSiaga, alert.UpperLimitWaspada, alert.UpperLimitAwas,
+			alert.UpdatedBy); err != nil {
 			return fmt.Errorf("failed to upsert alert level for %s: %w", alert.NamaLokasi, err)
 		}
 	}

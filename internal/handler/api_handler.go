@@ -857,9 +857,13 @@ func (h *APIHandler) UpdateAlertLevel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	alert := &domain.StationAlertLevel{
-		NamaLokasi: namaLokasi,
-		AlertLevel: req.AlertLevel,
-		UpdatedBy:  claims.Username,
+		NamaLokasi:        namaLokasi,
+		AlertLevel:        req.AlertLevel,
+		UpperLimitNormal:  req.UpperLimitNormal,
+		UpperLimitSiaga:   req.UpperLimitSiaga,
+		UpperLimitWaspada: req.UpperLimitWaspada,
+		UpperLimitAwas:    req.UpperLimitAwas,
+		UpdatedBy:         claims.Username,
 	}
 
 	if err := h.alertLevelRepo.Upsert(ctx, alert); err != nil {
@@ -902,9 +906,13 @@ func (h *APIHandler) BulkUpdateAlertLevels(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		alerts = append(alerts, domain.StationAlertLevel{
-			NamaLokasi: u.NamaLokasi,
-			AlertLevel: u.AlertLevel,
-			UpdatedBy:  claims.Username,
+			NamaLokasi:        u.NamaLokasi,
+			AlertLevel:        u.AlertLevel,
+			UpperLimitNormal:  u.UpperLimitNormal,
+			UpperLimitSiaga:   u.UpperLimitSiaga,
+			UpperLimitWaspada: u.UpperLimitWaspada,
+			UpperLimitAwas:    u.UpperLimitAwas,
+			UpdatedBy:         claims.Username,
 		})
 	}
 

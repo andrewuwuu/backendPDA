@@ -693,6 +693,10 @@ Authorization: Bearer <token>
       "id": 1,
       "nama_lokasi": "pdapengubuan",
       "alert_level": "normal",
+      "upper_limit_normal": 1.0,
+      "upper_limit_siaga": 1.5,
+      "upper_limit_waspada": 2.0,
+      "upper_limit_awas": 2.5,
       "updated_by": "admin",
       "updated_at": "2025-12-03T07:00:00Z",
       "created_at": "2025-12-01T00:00:00Z"
@@ -716,6 +720,10 @@ Authorization: Bearer <token>
   "id": 1,
   "nama_lokasi": "pdapengubuan",
   "alert_level": "siaga",
+  "upper_limit_normal": 1.0,
+  "upper_limit_siaga": 1.5,
+  "upper_limit_waspada": 2.0,
+  "upper_limit_awas": 2.5,
   "updated_by": "admin",
   "updated_at": "2025-12-03T07:00:00Z",
   "created_at": "2025-12-01T00:00:00Z"
@@ -775,7 +783,11 @@ Authorization: Bearer <token>
 **Request:**
 ```json
 {
-  "alert_level": "siaga"
+  "alert_level": "siaga",
+  "upper_limit_normal": 1.0,
+  "upper_limit_siaga": 1.5,
+  "upper_limit_waspada": 2.0,
+  "upper_limit_awas": 2.5
 }
 ```
 
@@ -804,11 +816,19 @@ Authorization: Bearer <token>
   "updates": [
     {
       "nama_lokasi": "pdapengubuan",
-      "alert_level": "siaga"
+      "alert_level": "siaga",
+      "upper_limit_normal": 1.0,
+      "upper_limit_siaga": 1.5,
+      "upper_limit_waspada": 2.0,
+      "upper_limit_awas": 2.5
     },
     {
       "nama_lokasi": "pdaargoguruh",
-      "alert_level": "waspada"
+      "alert_level": "waspada",
+      "upper_limit_normal": 0.8,
+      "upper_limit_siaga": 1.2,
+      "upper_limit_waspada": 1.6,
+      "upper_limit_awas": 2.0
     }
   ]
 }
