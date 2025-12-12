@@ -38,7 +38,6 @@ type JWTManager struct {
 	blacklistMu sync.RWMutex
 }
 
-// NewJWTManager creates a new JWT manager with auto-generated 256-bit key
 func NewJWTManager(expiryHours int) *JWTManager {
 	m := &JWTManager{
 		currentKey:  generateKey(),
@@ -58,7 +57,6 @@ func NewJWTManager(expiryHours int) *JWTManager {
 	return m
 }
 
-// generateKey creates a cryptographically secure 256-bit (32 byte) key
 func generateKey() []byte {
 	key := make([]byte, 32) // 256 bits
 	if _, err := rand.Read(key); err != nil {
@@ -67,7 +65,6 @@ func generateKey() []byte {
 	return key
 }
 
-// startKeyRotation rotates key every 24 hours
 func (m *JWTManager) startKeyRotation() {
 	ticker := time.NewTicker(24 * time.Hour)
 	defer ticker.Stop()
@@ -82,7 +79,6 @@ func (m *JWTManager) startKeyRotation() {
 	}
 }
 
-// rotateKey performs key rotation
 func (m *JWTManager) rotateKey() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -93,12 +89,10 @@ func (m *JWTManager) rotateKey() {
 	log.Printf("[JWT] Key rotated at %s", time.Now().Format(time.RFC3339))
 }
 
-// Stop stops the key rotation goroutine
 func (m *JWTManager) Stop() {
 	close(m.stopChan)
 }
 
-// GenerateToken creates a new JWT token
 func (m *JWTManager) GenerateToken(userID int64, username, role string) (string, error) {
 	m.mu.RLock()
 	key := m.currentKey
@@ -119,8 +113,6 @@ func (m *JWTManager) GenerateToken(userID int64, username, role string) (string,
 	return token.SignedString(key)
 }
 
-// ValidateToken validates and parses a JWT token
-// Tries current key first, then previous key (for rotation grace period)
 func (m *JWTManager) ValidateToken(tokenString string) (*Claims, error) {
 	if m.IsBlacklisted(tokenString) {
 		return nil, ErrBlacklistedToken
@@ -166,7 +158,6 @@ func (m *JWTManager) validateWithKey(tokenString string, key []byte) (*Claims, e
 	return claims, nil
 }
 
-// GetKeyInfo returns key info for debugging (not the actual key)
 func (m *JWTManager) GetKeyInfo() map[string]interface{} {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -179,7 +170,6 @@ func (m *JWTManager) GetKeyInfo() map[string]interface{} {
 	}
 }
 
-// ForceRotate manually triggers key rotation (for testing)
 func (m *JWTManager) ForceRotate() {
 	m.rotateKey()
 }
