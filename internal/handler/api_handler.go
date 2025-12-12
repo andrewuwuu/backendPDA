@@ -88,6 +88,9 @@ func (h *APIHandler) RegisterRoutes(r *mux.Router) {
 	protected.HandleFunc("/alert-levels/{namaLokasi}", h.GetAlertLevel).Methods("GET")
 	protected.HandleFunc("/alert-levels/filter/{level}", h.GetAlertLevelsByLevel).Methods("GET")
 
+	protected.HandleFunc("/export/daily", h.ExportDailyReport).Methods("GET")
+	protected.HandleFunc("/export/weekly", h.ExportWeeklyReports).Methods("GET")
+
 	adminRoutes := protected.PathPrefix("").Subrouter()
 	adminRoutes.Use(authMiddleware.RequireRole("admin"))
 
@@ -100,9 +103,6 @@ func (h *APIHandler) RegisterRoutes(r *mux.Router) {
 	adminRoutes.HandleFunc("/alert-levels/{namaLokasi}", h.UpdateAlertLevel).Methods("PUT")
 	adminRoutes.HandleFunc("/alert-levels", h.BulkUpdateAlertLevels).Methods("PUT")
 	adminRoutes.HandleFunc("/alert-levels/{namaLokasi}", h.DeleteAlertLevel).Methods("DELETE")
-
-	protected.HandleFunc("/export/daily", h.ExportDailyReport).Methods("GET")
-	protected.HandleFunc("/export/weekly", h.ExportWeeklyReports).Methods("GET")
 
 	adminRoutes.HandleFunc("/debug/jwt", h.GetJWTInfo).Methods("GET")
 }
