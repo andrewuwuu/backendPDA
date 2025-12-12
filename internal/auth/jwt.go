@@ -1,174 +1,256 @@
 package auth
 
 import (
-    "crypto/rand"
-    "encoding/base64"
-    "errors"
-    "log"
-    "sync"
-    "time"
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
+	"log"
+	"sync"
+	"time"
 
-    "github.com/golang-jwt/jwt/v5"
+	"github.com/golang-jwt/jwt/v5"
 )
 
 var (
-    ErrInvalidToken = errors.New("invalid token")
-    ErrExpiredToken = errors.New("token has expired")
+	ErrInvalidToken     = errors.New("invalid token")
+	ErrExpiredToken     = errors.New("token has expired")
+	ErrBlacklistedToken = errors.New("token has been invalidated")
 )
 
 type Claims struct {
-    UserID   int64  `json:"user_id"`
-    Username string `json:"username"`
-    Role     string `json:"role"`
-    jwt.RegisteredClaims
+	UserID   int64  `json:"user_id"`
+	Username string `json:"username"`
+	Role     string `json:"role"`
+	jwt.RegisteredClaims
+}
+
+type blacklistEntry struct {
+	expiresAt time.Time
 }
 
 type JWTManager struct {
-    currentKey  []byte
-    previousKey []byte
-    expiryHours int
-    mu          sync.RWMutex
-    stopChan    chan struct{}
+	currentKey  []byte
+	previousKey []byte
+	expiryHours int
+	mu          sync.RWMutex
+	stopChan    chan struct{}
+	blacklist   map[string]blacklistEntry
+	blacklistMu sync.RWMutex
 }
 
 // NewJWTManager creates a new JWT manager with auto-generated 256-bit key
 func NewJWTManager(expiryHours int) *JWTManager {
-    m := &JWTManager{
-        currentKey:  generateKey(),
-        previousKey: nil,
-        expiryHours: expiryHours,
-        stopChan:    make(chan struct{}),
-    }
+	m := &JWTManager{
+		currentKey:  generateKey(),
+		previousKey: nil,
+		expiryHours: expiryHours,
+		stopChan:    make(chan struct{}),
+		blacklist:   make(map[string]blacklistEntry),
+	}
 
-    log.Printf("[JWT] Initial key generated (256-bit)")
-    log.Printf("[JWT] Key rotation scheduled every 24 hours")
+	log.Printf("[JWT] Initial key generated (256-bit)")
+	log.Printf("[JWT] Key rotation scheduled every 24 hours")
 
-    // Start key rotation goroutine
-    go m.startKeyRotation()
+	// Start key rotation goroutine
+	go m.startKeyRotation()
+	go m.startBlacklistCleanup()
 
-    return m
+	return m
 }
 
 // generateKey creates a cryptographically secure 256-bit (32 byte) key
 func generateKey() []byte {
-    key := make([]byte, 32) // 256 bits
-    if _, err := rand.Read(key); err != nil {
-        log.Fatalf("Failed to generate JWT key: %v", err)
-    }
-    return key
+	key := make([]byte, 32) // 256 bits
+	if _, err := rand.Read(key); err != nil {
+		log.Fatalf("Failed to generate JWT key: %v", err)
+	}
+	return key
 }
 
 // startKeyRotation rotates key every 24 hours
 func (m *JWTManager) startKeyRotation() {
-    ticker := time.NewTicker(24 * time.Hour)
-    defer ticker.Stop()
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
 
-    for {
-        select {
-        case <-ticker.C:
-            m.rotateKey()
-        case <-m.stopChan:
-            return
-        }
-    }
+	for {
+		select {
+		case <-ticker.C:
+			m.rotateKey()
+		case <-m.stopChan:
+			return
+		}
+	}
 }
 
 // rotateKey performs key rotation
 func (m *JWTManager) rotateKey() {
-    m.mu.Lock()
-    defer m.mu.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-    m.previousKey = m.currentKey
-    m.currentKey = generateKey()
+	m.previousKey = m.currentKey
+	m.currentKey = generateKey()
 
-    log.Printf("[JWT] Key rotated at %s", time.Now().Format(time.RFC3339))
+	log.Printf("[JWT] Key rotated at %s", time.Now().Format(time.RFC3339))
 }
 
 // Stop stops the key rotation goroutine
 func (m *JWTManager) Stop() {
-    close(m.stopChan)
+	close(m.stopChan)
 }
 
 // GenerateToken creates a new JWT token
 func (m *JWTManager) GenerateToken(userID int64, username, role string) (string, error) {
-    m.mu.RLock()
-    key := m.currentKey
-    m.mu.RUnlock()
+	m.mu.RLock()
+	key := m.currentKey
+	m.mu.RUnlock()
 
-    claims := &Claims{
-        UserID:   userID,
-        Username: username,
-        Role:     role,
-        RegisteredClaims: jwt.RegisteredClaims{
-            ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(m.expiryHours) * time.Hour)),
-            IssuedAt:  jwt.NewNumericDate(time.Now()),
-            NotBefore: jwt.NewNumericDate(time.Now()),
-        },
-    }
+	claims := &Claims{
+		UserID:   userID,
+		Username: username,
+		Role:     role,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Duration(m.expiryHours) * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			NotBefore: jwt.NewNumericDate(time.Now()),
+		},
+	}
 
-    token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-    return token.SignedString(key)
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(key)
 }
 
 // ValidateToken validates and parses a JWT token
 // Tries current key first, then previous key (for rotation grace period)
 func (m *JWTManager) ValidateToken(tokenString string) (*Claims, error) {
-    m.mu.RLock()
-    currentKey := m.currentKey
-    previousKey := m.previousKey
-    m.mu.RUnlock()
+	if m.IsBlacklisted(tokenString) {
+		return nil, ErrBlacklistedToken
+	}
 
-    // Try current key first
-    claims, err := m.validateWithKey(tokenString, currentKey)
-    if err == nil {
-        return claims, nil
-    }
+	m.mu.RLock()
+	currentKey := m.currentKey
+	previousKey := m.previousKey
+	m.mu.RUnlock()
 
-    // Try previous key (grace period after rotation)
-    if previousKey != nil {
-        claims, err = m.validateWithKey(tokenString, previousKey)
-        if err == nil {
-            return claims, nil
-        }
-    }
+	claims, err := m.validateWithKey(tokenString, currentKey)
+	if err == nil {
+		return claims, nil
+	}
 
-    return nil, ErrInvalidToken
+	if previousKey != nil {
+		claims, err = m.validateWithKey(tokenString, previousKey)
+		if err == nil {
+			return claims, nil
+		}
+	}
+
+	return nil, ErrInvalidToken
 }
 
 func (m *JWTManager) validateWithKey(tokenString string, key []byte) (*Claims, error) {
-    token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
-        if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-            return nil, ErrInvalidToken
-        }
-        return key, nil
-    })
+	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, ErrInvalidToken
+		}
+		return key, nil
+	})
 
-    if err != nil {
-        return nil, err
-    }
+	if err != nil {
+		return nil, err
+	}
 
-    claims, ok := token.Claims.(*Claims)
-    if !ok || !token.Valid {
-        return nil, ErrInvalidToken
-    }
+	claims, ok := token.Claims.(*Claims)
+	if !ok || !token.Valid {
+		return nil, ErrInvalidToken
+	}
 
-    return claims, nil
+	return claims, nil
 }
 
 // GetKeyInfo returns key info for debugging (not the actual key)
 func (m *JWTManager) GetKeyInfo() map[string]interface{} {
-    m.mu.RLock()
-    defer m.mu.RUnlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
-    return map[string]interface{}{
-        "current_key_hash":  base64.StdEncoding.EncodeToString(m.currentKey[:8]) + "...",
-        "has_previous_key":  m.previousKey != nil,
-        "expiry_hours":      m.expiryHours,
-        "rotation_interval": "24h",
-    }
+	return map[string]interface{}{
+		"current_key_hash":  base64.StdEncoding.EncodeToString(m.currentKey[:8]) + "...",
+		"has_previous_key":  m.previousKey != nil,
+		"expiry_hours":      m.expiryHours,
+		"rotation_interval": "24h",
+	}
 }
 
 // ForceRotate manually triggers key rotation (for testing)
 func (m *JWTManager) ForceRotate() {
-    m.rotateKey()
+	m.rotateKey()
+}
+
+func (m *JWTManager) startBlacklistCleanup() {
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			m.cleanupBlacklist()
+		case <-m.stopChan:
+			return
+		}
+	}
+}
+
+func (m *JWTManager) cleanupBlacklist() {
+	m.blacklistMu.Lock()
+	defer m.blacklistMu.Unlock()
+
+	now := time.Now()
+	for token, entry := range m.blacklist {
+		if now.After(entry.expiresAt) {
+			delete(m.blacklist, token)
+		}
+	}
+}
+
+func (m *JWTManager) InvalidateToken(tokenString string) error {
+	claims, err := m.validateTokenWithoutBlacklistCheck(tokenString)
+	if err != nil {
+		return err
+	}
+
+	m.blacklistMu.Lock()
+	defer m.blacklistMu.Unlock()
+
+	m.blacklist[tokenString] = blacklistEntry{
+		expiresAt: claims.ExpiresAt.Time,
+	}
+
+	return nil
+}
+
+func (m *JWTManager) validateTokenWithoutBlacklistCheck(tokenString string) (*Claims, error) {
+	m.mu.RLock()
+	currentKey := m.currentKey
+	previousKey := m.previousKey
+	m.mu.RUnlock()
+
+	claims, err := m.validateWithKey(tokenString, currentKey)
+	if err == nil {
+		return claims, nil
+	}
+
+	if previousKey != nil {
+		claims, err = m.validateWithKey(tokenString, previousKey)
+		if err == nil {
+			return claims, nil
+		}
+	}
+
+	return nil, ErrInvalidToken
+}
+
+func (m *JWTManager) IsBlacklisted(tokenString string) bool {
+	m.blacklistMu.RLock()
+	defer m.blacklistMu.RUnlock()
+
+	_, exists := m.blacklist[tokenString]
+	return exists
 }

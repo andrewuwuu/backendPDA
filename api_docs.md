@@ -40,6 +40,25 @@ Authorization: Bearer <token>
 
 ---
 
+### Logout
+
+```
+POST /auth/logout
+Authorization: Bearer <token>
+```
+
+**Response:**
+```json
+{
+  "status": "logged_out",
+  "message": "token has been invalidated"
+}
+```
+
+Invalidates the current JWT token. Once logged out, the token can no longer be used for authenticated requests.
+
+---
+
 ## PDA Data
 
 ### Get Realtime Data with Debit
@@ -916,6 +935,7 @@ All errors return:
 | Endpoint | Method | Auth | Role | Description |
 |----------|--------|------|------|-------------|
 | `/auth/login` | POST | ❌ | - | Login |
+| `/auth/logout` | POST | ✅ | user | Logout (invalidate token) |
 | `/health` | GET | ❌ | - | Health check |
 | **PDA Data** |
 | `/pda/realtime` | GET | ✅ | user | Realtime data with debit |

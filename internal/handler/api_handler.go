@@ -64,6 +64,8 @@ func (h *APIHandler) RegisterRoutes(r *mux.Router) {
 	protected := api.PathPrefix("").Subrouter()
 	protected.Use(authMiddleware.Authenticate)
 
+	protected.HandleFunc("/auth/logout", h.Logout).Methods("POST")
+
 	protected.HandleFunc("/pda/realtime", h.GetRealtimeWithDebit).Methods("GET")
 	protected.HandleFunc("/pda/historical", h.GetHistoricalWithDebit).Methods("GET")
 
@@ -134,6 +136,26 @@ func (h *APIHandler) Login(w http.ResponseWriter, r *http.Request) {
 	h.jsonResponse(w, domain.LoginResponse{
 		Token: token,
 		User:  *user,
+	})
+}
+
+func (h *APIHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" || len(authHeader) < 8 {
+		h.jsonError(w, "missing authorization header", http.StatusBadRequest)
+		return
+	}
+
+	tokenString := authHeader[7:]
+
+	if err := h.jwtManager.InvalidateToken(tokenString); err != nil {
+		h.jsonError(w, "failed to invalidate token", http.StatusInternalServerError)
+		return
+	}
+
+	h.jsonResponse(w, map[string]string{
+		"status":  "logged_out",
+		"message": "token has been invalidated",
 	})
 }
 
