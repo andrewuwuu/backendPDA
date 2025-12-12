@@ -860,6 +860,21 @@ Authorization: Bearer <token>
 
 ---
 
+### Export Daily Report (Today)
+
+```
+GET /reports/export/daily
+Authorization: Bearer <token>
+```
+
+**Response:** Downloads `laporan_harian_YYYY-MM-DD.xlsx`
+
+Exports today's daily report with:
+- Debit readings at 07:00, 12:00, and 17:00
+- Min/Max TMA values for the day
+
+---
+
 ### Export Weekly Reports (Last 7 Days)
 
 ```
@@ -969,6 +984,7 @@ All errors return:
 | `/alert-levels/{namaLokasi}` | DELETE | ✅ | **admin** | Delete station alert level |
 | **Reports** |
 | `/reports/export` | GET | ✅ | user | Export Excel report |
+| `/reports/export/daily` | GET | ✅ | user | Export today's daily report (Excel) |
 | `/reports/export/weekly` | GET | ✅ | user | Export weekly reports (ZIP with 7 days) |
 | **Debug** |
 | `/debug/jwt` | GET | ✅ | **admin** | JWT debug info |

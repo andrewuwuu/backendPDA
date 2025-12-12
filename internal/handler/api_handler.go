@@ -101,8 +101,9 @@ func (h *APIHandler) RegisterRoutes(r *mux.Router) {
 	adminRoutes.HandleFunc("/alert-levels", h.BulkUpdateAlertLevels).Methods("PUT")
 	adminRoutes.HandleFunc("/alert-levels/{namaLokasi}", h.DeleteAlertLevel).Methods("DELETE")
 
-	protected.HandleFunc("/reports/export", h.ExportReport).Methods("GET")
+	protected.HandleFunc("/reports/export/daily", h.ExportDailyReport).Methods("GET")
 	protected.HandleFunc("/reports/export/weekly", h.ExportWeeklyReports).Methods("GET")
+	protected.HandleFunc("/reports/export", h.ExportReport).Methods("GET")
 
 	adminRoutes.HandleFunc("/debug/jwt", h.GetJWTInfo).Methods("GET")
 }
@@ -188,6 +189,83 @@ func (h *APIHandler) ExportReport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 	w.Header().Set("Content-Disposition", "attachment; filename="+filename)
 	w.Write(buf.Bytes())
+}
+
+func (h *APIHandler) ExportDailyReport(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	loc, err := time.LoadLocation("Asia/Jakarta")
+	if err != nil {
+		loc = time.FixedZone("WIB", 7*60*60)
+	}
+
+	now := time.Now().In(loc)
+
+	stations, err := h.stationRepo.GetAll(ctx)
+	if err != nil {
+		h.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	stationMap := make(map[string]string)
+	for _, st := range stations {
+		stationMap[st.NamaLokasi] = st.NamaAlat
+	}
+
+	tmaSummary, err := h.readingService.GetDailyTMASummary(ctx, now)
+	if err != nil {
+		h.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	debitSnapshots, err := h.readingService.GetDebitSnapshots(ctx, now, []int{7, 12, 17})
+	if err != nil {
+		h.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	stationNames := make(map[string]bool)
+	for name := range tmaSummary {
+		stationNames[name] = true
+	}
+	for name := range debitSnapshots {
+		stationNames[name] = true
+	}
+
+	var reports []domain.DailyStationReport
+	for namaLokasi := range stationNames {
+		namaAlat := stationMap[namaLokasi]
+		if namaAlat == "" {
+			namaAlat = namaLokasi
+		}
+
+		report := domain.DailyStationReport{
+			NamaLokasi: namaLokasi,
+			NamaAlat:   namaAlat,
+		}
+
+		if tma, ok := tmaSummary[namaLokasi]; ok {
+			report.MinTMA = tma.MinTMA
+			report.MaxTMA = tma.MaxTMA
+		}
+
+		if debits, ok := debitSnapshots[namaLokasi]; ok {
+			report.Debit07 = debits[7]
+			report.Debit12 = debits[12]
+			report.Debit17 = debits[17]
+		}
+
+		reports = append(reports, report)
+	}
+
+	excelBuf, filename, err := h.excelService.GenerateDailyReport(reports, now)
+	if err != nil {
+		h.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	w.Header().Set("Content-Disposition", "attachment; filename="+filename)
+	w.Write(excelBuf.Bytes())
 }
 
 func (h *APIHandler) ExportWeeklyReports(w http.ResponseWriter, r *http.Request) {
