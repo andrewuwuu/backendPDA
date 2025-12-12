@@ -863,7 +863,7 @@ Authorization: Bearer <token>
 ### Export Daily Report (Today)
 
 ```
-GET /reports/export/daily
+GET /export/daily
 Authorization: Bearer <token>
 ```
 
@@ -878,7 +878,7 @@ Exports today's daily report with:
 ### Export Weekly Reports (Last 7 Days)
 
 ```
-GET /reports/export/weekly
+GET /export/weekly
 Authorization: Bearer <token>
 ```
 
@@ -983,7 +983,7 @@ All errors return:
 | `/alert-levels` | PUT | ✅ | **admin** | Bulk update alert levels |
 | `/alert-levels/{namaLokasi}` | DELETE | ✅ | **admin** | Delete station alert level |
 | **Reports** |
-| `/reports/export/daily` | GET | ✅ | user | Export today's daily report (Excel) |
-| `/reports/export/weekly` | GET | ✅ | user | Export weekly reports (ZIP with 7 days) |
+| `/export/daily` | GET | ✅ | user | Export today's daily report (Excel) |
+| `/export/weekly` | GET | ✅ | user | Export weekly reports (ZIP with 7 days) |
 | **Debug** |
 | `/debug/jwt` | GET | ✅ | **admin** | JWT debug info |

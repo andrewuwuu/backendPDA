@@ -101,8 +101,8 @@ func (h *APIHandler) RegisterRoutes(r *mux.Router) {
 	adminRoutes.HandleFunc("/alert-levels", h.BulkUpdateAlertLevels).Methods("PUT")
 	adminRoutes.HandleFunc("/alert-levels/{namaLokasi}", h.DeleteAlertLevel).Methods("DELETE")
 
-	protected.HandleFunc("/reports/export/daily", h.ExportDailyReport).Methods("GET")
-	protected.HandleFunc("/reports/export/weekly", h.ExportWeeklyReports).Methods("GET")
+	protected.HandleFunc("/export/daily", h.ExportDailyReport).Methods("GET")
+	protected.HandleFunc("/export/weekly", h.ExportWeeklyReports).Methods("GET")
 
 	adminRoutes.HandleFunc("/debug/jwt", h.GetJWTInfo).Methods("GET")
 }
