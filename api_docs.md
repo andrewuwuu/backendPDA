@@ -983,7 +983,6 @@ All errors return:
 | `/alert-levels` | PUT | ✅ | **admin** | Bulk update alert levels |
 | `/alert-levels/{namaLokasi}` | DELETE | ✅ | **admin** | Delete station alert level |
 | **Reports** |
-| `/reports/export` | GET | ✅ | user | Export Excel report |
 | `/reports/export/daily` | GET | ✅ | user | Export today's daily report (Excel) |
 | `/reports/export/weekly` | GET | ✅ | user | Export weekly reports (ZIP with 7 days) |
 | **Debug** |

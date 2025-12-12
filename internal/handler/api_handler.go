@@ -103,7 +103,6 @@ func (h *APIHandler) RegisterRoutes(r *mux.Router) {
 
 	protected.HandleFunc("/reports/export/daily", h.ExportDailyReport).Methods("GET")
 	protected.HandleFunc("/reports/export/weekly", h.ExportWeeklyReports).Methods("GET")
-	protected.HandleFunc("/reports/export", h.ExportReport).Methods("GET")
 
 	adminRoutes.HandleFunc("/debug/jwt", h.GetJWTInfo).Methods("GET")
 }
