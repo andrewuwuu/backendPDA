@@ -388,10 +388,33 @@ func (h *APIHandler) GetLatestReadings(w http.ResponseWriter, r *http.Request) {
 		h.jsonError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	// Fetch all alert levels for computing alert status
+	alertLevels, err := h.alertLevelRepo.GetAll(ctx)
+	if err != nil {
+		h.jsonError(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Build lookup map
+	alertMap := make(map[string]*domain.StationAlertLevel)
+	for i := range alertLevels {
+		alertMap[alertLevels[i].NamaLokasi] = &alertLevels[i]
+	}
+
+	// Compute alert level for each reading
+	results := make([]domain.ReadingWithAlertLevel, len(readings))
+	for i, reading := range readings {
+		results[i] = domain.ReadingWithAlertLevel{
+			HourlyReading: reading,
+			AlertLevel:    domain.DetermineAlertLevel(reading.TMA, alertMap[reading.NamaLokasi]),
+		}
+	}
+
 	h.jsonResponse(w, map[string]interface{}{
 		"hour_bucket":     truncateToHour(time.Now()),
-		"station_count":   len(readings),
-		"latest_readings": readings,
+		"station_count":   len(results),
+		"latest_readings": results,
 	})
 }
 
@@ -845,11 +868,6 @@ func (h *APIHandler) UpdateAlertLevel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !req.AlertLevel.IsValid() {
-		h.jsonError(w, "invalid alert level, must be one of: normal, siaga, waspada, awas", http.StatusBadRequest)
-		return
-	}
-
 	station, err := h.stationRepo.GetByNamaLokasi(ctx, namaLokasi)
 	if err != nil || station == nil {
 		h.jsonError(w, "station not found", http.StatusNotFound)
@@ -858,7 +876,7 @@ func (h *APIHandler) UpdateAlertLevel(w http.ResponseWriter, r *http.Request) {
 
 	alert := &domain.StationAlertLevel{
 		NamaLokasi:        namaLokasi,
-		AlertLevel:        req.AlertLevel,
+		AlertLevel:        domain.AlertLevelNormal,
 		UpperLimitNormal:  req.UpperLimitNormal,
 		UpperLimitSiaga:   req.UpperLimitSiaga,
 		UpperLimitWaspada: req.UpperLimitWaspada,
@@ -874,7 +892,6 @@ func (h *APIHandler) UpdateAlertLevel(w http.ResponseWriter, r *http.Request) {
 	h.jsonResponse(w, map[string]interface{}{
 		"status":      "updated",
 		"nama_lokasi": namaLokasi,
-		"alert_level": req.AlertLevel,
 		"updated_by":  claims.Username,
 	})
 }
@@ -901,13 +918,9 @@ func (h *APIHandler) BulkUpdateAlertLevels(w http.ResponseWriter, r *http.Reques
 
 	alerts := make([]domain.StationAlertLevel, 0, len(req.Updates))
 	for _, u := range req.Updates {
-		if !u.AlertLevel.IsValid() {
-			h.jsonError(w, "invalid alert level for station "+u.NamaLokasi, http.StatusBadRequest)
-			return
-		}
 		alerts = append(alerts, domain.StationAlertLevel{
 			NamaLokasi:        u.NamaLokasi,
-			AlertLevel:        u.AlertLevel,
+			AlertLevel:        domain.AlertLevelNormal,
 			UpperLimitNormal:  u.UpperLimitNormal,
 			UpperLimitSiaga:   u.UpperLimitSiaga,
 			UpperLimitWaspada: u.UpperLimitWaspada,

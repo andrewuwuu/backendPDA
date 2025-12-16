@@ -675,7 +675,15 @@ For TMA = 2.0 → Formula B is used
 
 ## Alert Levels
 
-> **Alert Levels** track the current status of each station: `normal`, `siaga`, `waspada`, or `awas`.
+> **Alert Levels** are computed automatically in real-time based on TMA readings against configured thresholds.
+> Admins only configure the threshold limits (`upper_limit_*`); the actual alert level is determined by comparing TMA against these limits.
+>
+> | Level | Condition |
+> |-------|----------|
+> | `normal` | TMA ≤ upper_limit_normal |
+> | `siaga` | TMA > upper_limit_normal |
+> | `waspada` | TMA > upper_limit_siaga |
+> | `awas` | TMA > upper_limit_waspada |
 
 ### Get All Alert Levels
 
@@ -783,7 +791,6 @@ Authorization: Bearer <token>
 **Request:**
 ```json
 {
-  "alert_level": "siaga",
   "upper_limit_normal": 1.0,
   "upper_limit_siaga": 1.5,
   "upper_limit_waspada": 2.0,
@@ -796,9 +803,9 @@ Authorization: Bearer <token>
 {
   "status": "updated",
   "nama_lokasi": "pdapengubuan",
-  "alert_level": "siaga",
   "updated_by": "admin"
 }
+```
 ```
 
 ---
@@ -816,7 +823,6 @@ Authorization: Bearer <token>
   "updates": [
     {
       "nama_lokasi": "pdapengubuan",
-      "alert_level": "siaga",
       "upper_limit_normal": 1.0,
       "upper_limit_siaga": 1.5,
       "upper_limit_waspada": 2.0,
@@ -824,7 +830,6 @@ Authorization: Bearer <token>
     },
     {
       "nama_lokasi": "pdaargoguruh",
-      "alert_level": "waspada",
       "upper_limit_normal": 0.8,
       "upper_limit_siaga": 1.2,
       "upper_limit_waspada": 1.6,

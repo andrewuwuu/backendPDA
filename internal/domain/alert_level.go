@@ -33,11 +33,10 @@ type StationAlertLevel struct {
 }
 
 type AlertLevelUpdateRequest struct {
-	AlertLevel        AlertLevel `json:"alert_level"`
-	UpperLimitNormal  *float64   `json:"upper_limit_normal,omitempty"`
-	UpperLimitSiaga   *float64   `json:"upper_limit_siaga,omitempty"`
-	UpperLimitWaspada *float64   `json:"upper_limit_waspada,omitempty"`
-	UpperLimitAwas    *float64   `json:"upper_limit_awas,omitempty"`
+	UpperLimitNormal  *float64 `json:"upper_limit_normal,omitempty"`
+	UpperLimitSiaga   *float64 `json:"upper_limit_siaga,omitempty"`
+	UpperLimitWaspada *float64 `json:"upper_limit_waspada,omitempty"`
+	UpperLimitAwas    *float64 `json:"upper_limit_awas,omitempty"`
 }
 
 type BulkAlertLevelUpdateRequest struct {
@@ -45,10 +44,31 @@ type BulkAlertLevelUpdateRequest struct {
 }
 
 type AlertLevelUpdateItem struct {
-	NamaLokasi        string     `json:"nama_lokasi"`
-	AlertLevel        AlertLevel `json:"alert_level"`
-	UpperLimitNormal  *float64   `json:"upper_limit_normal,omitempty"`
-	UpperLimitSiaga   *float64   `json:"upper_limit_siaga,omitempty"`
-	UpperLimitWaspada *float64   `json:"upper_limit_waspada,omitempty"`
-	UpperLimitAwas    *float64   `json:"upper_limit_awas,omitempty"`
+	NamaLokasi        string   `json:"nama_lokasi"`
+	UpperLimitNormal  *float64 `json:"upper_limit_normal,omitempty"`
+	UpperLimitSiaga   *float64 `json:"upper_limit_siaga,omitempty"`
+	UpperLimitWaspada *float64 `json:"upper_limit_waspada,omitempty"`
+	UpperLimitAwas    *float64 `json:"upper_limit_awas,omitempty"`
+}
+
+// DetermineAlertLevel computes the alert level based on TMA value and thresholds.
+// Thresholds work as: if TMA > upper_limit_X, move to next level.
+// Order: normal -> siaga -> waspada -> awas
+func DetermineAlertLevel(tma float64, limits *StationAlertLevel) AlertLevel {
+	if limits == nil {
+		return AlertLevelNormal
+	}
+
+	// Check from highest to lowest severity
+	if limits.UpperLimitWaspada != nil && tma > *limits.UpperLimitWaspada {
+		return AlertLevelAwas
+	}
+	if limits.UpperLimitSiaga != nil && tma > *limits.UpperLimitSiaga {
+		return AlertLevelWaspada
+	}
+	if limits.UpperLimitNormal != nil && tma > *limits.UpperLimitNormal {
+		return AlertLevelSiaga
+	}
+
+	return AlertLevelNormal
 }
