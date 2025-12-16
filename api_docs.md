@@ -806,7 +806,7 @@ Authorization: Bearer <token>
   "updated_by": "admin"
 }
 ```
-```
+
 
 ---
 
