@@ -28,12 +28,15 @@ Lightweight Go-based telemetry monitor that ingests third-party telemetry data, 
 
 ## Project Layout
 
-````text
+```text
 .
 ├── api_docs.md
 ├── bin/
+│   ├── pda-dbinit
 │   └── pda-monitor
 ├── cmd/
+│   ├── dbinit/
+│   │   └── main.go
 │   └── server/
 │       └── main.go
 ├── go.mod
@@ -43,6 +46,8 @@ Lightweight Go-based telemetry monitor that ingests third-party telemetry data, 
 │   │   └── jwt.go
 │   ├── config/
 │   │   └── config.go
+│   ├── database/
+│   │   └── schema.go
 │   ├── domain/
 │   │   ├── alert_level.go
 │   │   ├── formula.go
@@ -78,16 +83,8 @@ Lightweight Go-based telemetry monitor that ingests third-party telemetry data, 
 │   └── util/
 │       └── station.go
 ├── Makefile
-└── readme.md
-```text
-.
-├── cmd/server/        # Application entry point
-├── internal/          # Core business logic
-├── pkg/               # Shared libraries
-├── bin/               # Local build output
-├── Makefile
-└── go.mod
-````
+└── README.md
+```
 
 ---
 
@@ -95,7 +92,7 @@ Lightweight Go-based telemetry monitor that ingests third-party telemetry data, 
 
 All runtime configuration is supplied via a `.env` file.
 
-Required variables:
+Required variables for the API server:
 
 ```env
 PORT=8080
@@ -130,6 +127,8 @@ LOG_CONSOLE=true        # Output to console/stdout
 
 Systemd loads this file directly at runtime.
 
+For `pda-dbinit`, only the `DB_*` and optional logging variables are required unless you pass `-dsn`.
+
 ---
 
 ## Local Development
@@ -138,12 +137,14 @@ Systemd loads this file directly at runtime.
 
 ```bash
 make build
+make build-dbinit
 ```
 
 Binary output:
 
 ```text
 ./bin/pda-monitor
+./bin/pda-dbinit
 ```
 
 ---
@@ -175,6 +176,7 @@ This installs:
 
 ```text
 ~/.local/bin/pda-monitor
+~/.local/bin/pda-dbinit
 ~/.config/pda-monitor/
 ~/.local/share/pda-monitor/
 ```
@@ -188,6 +190,13 @@ nano ~/.config/pda-monitor/.env
 ```
 
 Paste your environment config there.
+
+Initialize the database before starting the service:
+
+```bash
+~/.local/bin/pda-dbinit
+~/.local/bin/pda-dbinit -create-user -username admin -password admin123 -role admin
+```
 
 ---
 
@@ -249,8 +258,40 @@ sudo loginctl enable-linger "$USER"
 
 ```bash
 make build         # Build binary to ./bin
+make build-dbinit  # Build DB init CLI to ./bin
 make install-user  # Install binary to ~/.local/bin
 make clean         # Remove build output
+```
+
+## Database Initialization CLI
+
+Initialize the application tables inside an existing MySQL/MariaDB database:
+
+```bash
+./bin/pda-dbinit
+```
+
+Create an API user during setup:
+
+```bash
+./bin/pda-dbinit -create-user -username admin -password admin123 -role admin
+```
+
+Optional flags:
+
+```bash
+./bin/pda-dbinit -dsn 'user:pass@tcp(localhost:3306)/pda_monitor?parseTime=true&loc=Local'
+./bin/pda-dbinit -timeout 30s
+```
+
+This command creates these tables if they do not already exist:
+
+```text
+stations
+formula_params
+hourly_readings
+users
+station_alert_levels
 ```
 
 ---
