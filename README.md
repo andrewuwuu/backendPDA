@@ -128,6 +128,7 @@ LOG_CONSOLE=true        # Output to console/stdout
 Systemd loads this file directly at runtime.
 
 For `pda-dbinit`, only the `DB_*` and optional logging variables are required unless you pass `-dsn`.
+You can also point it at an explicit env file with `-env-file /opt/pda-monitor/.env`.
 
 ---
 
@@ -194,8 +195,8 @@ Paste your environment config there.
 Initialize the database before starting the service:
 
 ```bash
-~/.local/bin/pda-dbinit
-~/.local/bin/pda-dbinit -create-user -username admin -password admin123 -role admin
+~/.local/bin/pda-dbinit -env-file ~/.config/pda-monitor/.env
+~/.local/bin/pda-dbinit -env-file ~/.config/pda-monitor/.env -create-user -username admin -password admin123 -role admin
 ```
 
 ---
@@ -280,9 +281,12 @@ Create an API user during setup:
 Optional flags:
 
 ```bash
+./bin/pda-dbinit -env-file /opt/pda-monitor/.env
 ./bin/pda-dbinit -dsn 'user:pass@tcp(localhost:3306)/pda_monitor?parseTime=true&loc=Local'
 ./bin/pda-dbinit -timeout 30s
 ```
+
+`-env-file` is preferred over putting DB credentials on the command line. Use `-dsn` only for one-off overrides.
 
 This command creates these tables if they do not already exist:
 

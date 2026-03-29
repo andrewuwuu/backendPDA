@@ -21,6 +21,7 @@ import (
 const component = "DBInit"
 
 func main() {
+	envFile := flag.String("env-file", "", "Path to env file. Defaults to loading .env from the current working directory.")
 	dsnOverride := flag.String("dsn", "", "MySQL DSN override. Defaults to DB_* environment variables.")
 	timeout := flag.Duration("timeout", 15*time.Second, "Database connection timeout.")
 	createUser := flag.Bool("create-user", false, "Create an API user after schema initialization.")
@@ -29,7 +30,7 @@ func main() {
 	role := flag.String("role", "admin", "Role for the API user: admin or user.")
 	flag.Parse()
 
-	cfg := config.LoadDatabase()
+	cfg := config.LoadDatabaseFromEnvFile(*envFile)
 	if err := logger.Init(logger.Config{
 		Level:    cfg.Logging.Level,
 		FilePath: cfg.Logging.FilePath,

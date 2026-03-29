@@ -68,17 +68,25 @@ func Load() *Config {
 }
 
 func LoadServer() *Config {
-	cfg := load()
+	cfg := load("")
 	cfg.validateServer()
 	return cfg
 }
 
 func LoadDatabase() *Config {
-	return load()
+	return load("")
 }
 
-func load() *Config {
-	if err := godotenv.Load(); err != nil {
+func LoadDatabaseFromEnvFile(path string) *Config {
+	return load(path)
+}
+
+func load(envFile string) *Config {
+	if envFile != "" {
+		if err := godotenv.Overload(envFile); err != nil {
+			log.Printf("Warning: failed to load env file %s, using current environment: %v", envFile, err)
+		}
+	} else if err := godotenv.Load(); err != nil {
 		log.Println("Warning: .env file not found, using environment variables")
 	}
 
