@@ -2,8 +2,10 @@ package handler
 
 import (
 	"archive/zip"
+	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -659,13 +661,14 @@ func (h *APIHandler) CreateFormulas(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		h.calculator.InvalidateCache(batchReq.NamaLokasi)
+		recalculated := h.refreshDebitAfterFormulaChange(ctx, batchReq.NamaLokasi)
 		w.WriteHeader(http.StatusCreated)
 		h.jsonResponse(w, map[string]interface{}{
-			"status":      "created",
-			"nama_lokasi": batchReq.NamaLokasi,
-			"count":       len(formulas),
-			"formulas":    formulas,
+			"status":       "created",
+			"nama_lokasi":  batchReq.NamaLokasi,
+			"count":        len(formulas),
+			"formulas":     formulas,
+			"recalculated": recalculated,
 		})
 		return
 	}
@@ -716,11 +719,12 @@ func (h *APIHandler) UpdateStationFormulas(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	h.calculator.InvalidateCache(namaLokasi)
+	recalculated := h.refreshDebitAfterFormulaChange(ctx, namaLokasi)
 	h.jsonResponse(w, map[string]interface{}{
-		"status":      "updated",
-		"nama_lokasi": namaLokasi,
-		"count":       len(formulas),
+		"status":       "updated",
+		"nama_lokasi":  namaLokasi,
+		"count":        len(formulas),
+		"recalculated": recalculated,
 	})
 }
 
@@ -753,8 +757,11 @@ func (h *APIHandler) UpdateFormulaByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.calculator.InvalidateCache(params.NamaLokasi)
-	h.jsonResponse(w, map[string]string{"status": "updated"})
+	recalculated := h.refreshDebitAfterFormulaChange(ctx, params.NamaLokasi)
+	h.jsonResponse(w, map[string]interface{}{
+		"status":       "updated",
+		"recalculated": recalculated,
+	})
 }
 
 func (h *APIHandler) DeleteStationFormulas(w http.ResponseWriter, r *http.Request) {
@@ -766,7 +773,7 @@ func (h *APIHandler) DeleteStationFormulas(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	h.calculator.InvalidateCache(namaLokasi)
+	h.refreshDebitAfterFormulaChange(ctx, namaLokasi)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -790,8 +797,20 @@ func (h *APIHandler) DeleteFormulaByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.calculator.InvalidateCache(formula.NamaLokasi)
+	h.refreshDebitAfterFormulaChange(ctx, formula.NamaLokasi)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *APIHandler) refreshDebitAfterFormulaChange(ctx context.Context, namaLokasi string) bool {
+	h.calculator.InvalidateCache(namaLokasi)
+	if h.readingService == nil {
+		return false
+	}
+	if err := h.readingService.RecalculateDebit(ctx, namaLokasi); err != nil {
+		log.Printf("failed to recalculate debit for %s after formula change: %v", namaLokasi, err)
+		return false
+	}
+	return true
 }
 
 func (h *APIHandler) GetAllAlertLevels(w http.ResponseWriter, r *http.Request) {

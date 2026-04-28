@@ -12,3 +12,4 @@ vendor/
 .vscode/
 *.sql
 /bin/
+.codex
