@@ -543,7 +543,8 @@ Authorization: Bearer <token>
       "priority": 5,
       "updated_at": "2025-12-03T07:00:00Z"
     }
-  ]
+  ],
+  "recalculated": true
 }
 ```
 
@@ -582,7 +583,8 @@ Authorization: Bearer <token>
 {
   "status": "updated",
   "nama_lokasi": "pdapengubuan",
-  "count": 1
+  "count": 1,
+  "recalculated": true
 }
 ```
 
@@ -613,7 +615,8 @@ Authorization: Bearer <token>
 **Response:**
 ```json
 {
-  "status": "updated"
+  "status": "updated",
+  "recalculated": true
 }
 ```
 
@@ -670,6 +673,10 @@ Authorization: Bearer <token>
 
 For TMA = 1.2 → Formula A is used
 For TMA = 2.0 → Formula B is used
+
+### Automatic Debit Recalculation
+
+> When formulas are created, updated, or deleted, all existing debit values for the affected station are **automatically recalculated** using the new formula set. The `recalculated` field in the response indicates whether this recalculation succeeded (`true`) or failed (`false`). Delete endpoints still return `204 No Content` but recalculation is performed in the background.
 
 ---
 
