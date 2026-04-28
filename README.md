@@ -261,7 +261,39 @@ sudo loginctl enable-linger "$USER"
 make build         # Build binary to ./bin
 make build-dbinit  # Build DB init CLI to ./bin
 make install-user  # Install binary to ~/.local/bin
+make redeploy-user # Pull latest GitHub changes, rebuild, install for current user, restart user service
+make redeploy-system # Pull latest GitHub changes, rebuild, install under /opt, restart root service
 make clean         # Remove build output
+```
+
+## Redeploy From GitHub
+
+Use the redeploy script after the repository has already been cloned on the target machine.
+It requires a clean working tree before pulling from GitHub.
+
+User-level redeploy:
+
+```bash
+./scripts/redeploy.sh --scope user
+```
+
+System-wide redeploy:
+
+```bash
+./scripts/redeploy.sh --scope system
+```
+
+Deploy a specific branch or tag:
+
+```bash
+./scripts/redeploy.sh --scope system --ref main
+```
+
+Useful options:
+
+```bash
+./scripts/redeploy.sh --scope user --skip-pull     # deploy current checkout
+./scripts/redeploy.sh --scope system --skip-restart # install only
 ```
 
 ## Database Initialization CLI

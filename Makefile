@@ -38,5 +38,11 @@ install-user: build-server build-dbinit
 	@echo "Binary installed to $$HOME/.local/bin/$(DBINIT_NAME)"
 	@echo "Put your runtime config in $$HOME/.config/pda-monitor/.env"
 
+redeploy-user:
+	./scripts/redeploy.sh --scope user
+
+redeploy-system:
+	./scripts/redeploy.sh --scope system
+
 clean:
 	rm -rf $(BIN_DIR)
