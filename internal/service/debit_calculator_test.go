@@ -10,7 +10,9 @@ import (
 )
 
 type fakeFormulaRepo struct {
-	formulas map[string][]domain.FormulaParams
+	formulas             map[string][]domain.FormulaParams
+	getAllCalls          int
+	getByNamaLokasiCalls map[string]int
 }
 
 func (r *fakeFormulaRepo) GetByNamaLokasi(ctx context.Context, namaLokasi string) (*domain.FormulaParams, error) {
@@ -22,6 +24,7 @@ func (r *fakeFormulaRepo) GetByNamaLokasi(ctx context.Context, namaLokasi string
 }
 
 func (r *fakeFormulaRepo) GetAll(ctx context.Context) ([]domain.FormulaParams, error) {
+	r.getAllCalls++
 	var all []domain.FormulaParams
 	for _, formulas := range r.formulas {
 		all = append(all, formulas...)
@@ -42,6 +45,10 @@ func (r *fakeFormulaRepo) Delete(ctx context.Context, namaLokasi string) error {
 }
 
 func (r *fakeFormulaRepo) GetAllByNamaLokasi(ctx context.Context, namaLokasi string) ([]domain.FormulaParams, error) {
+	if r.getByNamaLokasiCalls == nil {
+		r.getByNamaLokasiCalls = make(map[string]int)
+	}
+	r.getByNamaLokasiCalls[namaLokasi]++
 	return append([]domain.FormulaParams(nil), r.formulas[namaLokasi]...), nil
 }
 
@@ -136,5 +143,65 @@ func TestDebitCalculatorRejectsTMAOutsideFormulaRange(t *testing.T) {
 	}
 	if result.IsValid {
 		t.Fatal("expected debit calculation to be invalid outside formula range")
+	}
+}
+
+func TestDebitCalculatorCalculateBatchPreloadsMissingStationsOnce(t *testing.T) {
+	repo := &fakeFormulaRepo{formulas: map[string][]domain.FormulaParams{
+		"pda-a": {
+			{
+				NamaLokasi:      "pda-a",
+				C:               10,
+				H0:              0,
+				B:               1,
+				TMAMin:          0,
+				TMAMinInclusive: true,
+				TMAMax:          10,
+				TMAMaxInclusive: true,
+				Priority:        1,
+			},
+		},
+		"pda-b": {
+			{
+				NamaLokasi:      "pda-b",
+				C:               5,
+				H0:              0,
+				B:               2,
+				TMAMin:          0,
+				TMAMinInclusive: true,
+				TMAMax:          10,
+				TMAMaxInclusive: true,
+				Priority:        1,
+			},
+		},
+	}}
+
+	calc := NewDebitCalculator(repo)
+	results, err := calc.CalculateBatch(context.Background(), []domain.PDARecord{
+		{NamaLokasi: "pda-a", TMA: 2},
+		{NamaLokasi: "pda-a", TMA: 3},
+		{NamaLokasi: "pda-b", TMA: 4},
+		{NamaLokasi: "pda-b", TMA: 5},
+	})
+	if err != nil {
+		t.Fatalf("CalculateBatch returned error: %v", err)
+	}
+
+	if repo.getAllCalls != 1 {
+		t.Fatalf("GetAll calls = %d, want 1", repo.getAllCalls)
+	}
+	if got := repo.getByNamaLokasiCalls["pda-a"]; got != 0 {
+		t.Fatalf("GetAllByNamaLokasi calls for pda-a = %d, want 0", got)
+	}
+	if got := repo.getByNamaLokasiCalls["pda-b"]; got != 0 {
+		t.Fatalf("GetAllByNamaLokasi calls for pda-b = %d, want 0", got)
+	}
+	if len(results) != 4 {
+		t.Fatalf("results len = %d, want 4", len(results))
+	}
+	for i, result := range results {
+		if !result.IsValid {
+			t.Fatalf("result %d expected valid", i)
+		}
 	}
 }

@@ -7,54 +7,42 @@ import (
 
 	"github.com/robfig/cron/v3"
 
-	"pda-monitor/internal/domain"
 	"pda-monitor/internal/logger"
 	"pda-monitor/internal/notification"
 	"pda-monitor/internal/report"
-	"pda-monitor/internal/repository"
 	"pda-monitor/internal/service"
-	"pda-monitor/internal/util"
+	"pda-monitor/internal/timeutil"
 )
 
 const component = "Scheduler"
 const HoursToKeep = 168
 
-var jakartaLoc *time.Location
-
-func init() {
-	var err error
-	jakartaLoc, err = time.LoadLocation("Asia/Jakarta")
-	if err != nil {
-		jakartaLoc = time.FixedZone("WIB", 7*60*60)
-	}
-}
-
 type Scheduler struct {
 	cron             *cron.Cron
 	telemetryService *service.TelemetryService
 	readingService   *service.ReadingService
+	reportService    *service.ReportService
 	calculator       *service.DebitCalculator
 	telegram         *notification.TelegramNotifier
 	excelService     *report.ExcelReportService
-	stationRepo      repository.StationRepository
 }
 
 func NewScheduler(
 	telemetryService *service.TelemetryService,
 	readingService *service.ReadingService,
+	reportService *service.ReportService,
 	calculator *service.DebitCalculator,
 	telegram *notification.TelegramNotifier,
 	excelService *report.ExcelReportService,
-	stationRepo repository.StationRepository,
 ) *Scheduler {
 	return &Scheduler{
-		cron:             cron.New(cron.WithLocation(jakartaLoc)),
+		cron:             cron.New(cron.WithLocation(timeutil.JakartaLocation())),
 		telemetryService: telemetryService,
 		readingService:   readingService,
+		reportService:    reportService,
 		calculator:       calculator,
 		telegram:         telegram,
 		excelService:     excelService,
-		stationRepo:      stationRepo,
 	}
 }
 
@@ -189,7 +177,7 @@ func (s *Scheduler) sendScheduledReport() {
 	defer cancel()
 
 	startTime := time.Now()
-	now := time.Now().In(jakartaLoc)
+	now := timeutil.NowJakarta()
 
 	records, err := s.telemetryService.FetchRealtime(ctx)
 	if err != nil {
@@ -245,81 +233,21 @@ func (s *Scheduler) sendDailyExcelReport() {
 	defer cancel()
 
 	startTime := time.Now()
-	now := time.Now().In(jakartaLoc)
+	now := timeutil.NowJakarta()
 
 	logger.Info(component, "Starting daily Excel report generation", logger.F("date", now.Format("2006-01-02")))
 
-	stations, err := s.stationRepo.GetAll(ctx)
+	reports, err := s.reportService.BuildDailyReport(ctx, now)
 	if err != nil {
-		logger.Error(component, "Failed to fetch stations for daily report", logger.Fields(
+		logger.Error(component, "Failed to build daily report data", logger.Fields(
 			"error", err.Error(),
 			"duration_ms", time.Since(startTime).Milliseconds(),
 		))
 		return
-	}
-
-	stationMap := make(map[string]string)
-	for _, st := range stations {
-		stationMap[st.NamaLokasi] = st.NamaAlat
-	}
-
-	tmaSummary, err := s.readingService.GetDailyTMASummary(ctx, now)
-	if err != nil {
-		logger.Error(component, "Failed to fetch TMA summary", logger.Fields(
-			"error", err.Error(),
-			"duration_ms", time.Since(startTime).Milliseconds(),
-		))
-		return
-	}
-
-	debitSnapshots, err := s.readingService.GetDebitSnapshots(ctx, now, []int{7, 12, 17})
-	if err != nil {
-		logger.Error(component, "Failed to fetch debit snapshots", logger.Fields(
-			"error", err.Error(),
-			"duration_ms", time.Since(startTime).Milliseconds(),
-		))
-		return
-	}
-
-	var reports []domain.DailyStationReport
-
-	stationNames := make(map[string]bool)
-	for name := range tmaSummary {
-		stationNames[name] = true
-	}
-	for name := range debitSnapshots {
-		stationNames[name] = true
-	}
-
-	for namaLokasi := range stationNames {
-		namaAlat := stationMap[namaLokasi]
-		if namaAlat == "" {
-			namaAlat = namaLokasi
-		}
-
-		report := domain.DailyStationReport{
-			NamaLokasi: namaLokasi,
-			NamaAlat:   util.CleanStationName(namaLokasi, namaAlat),
-		}
-
-		if tma, ok := tmaSummary[namaLokasi]; ok {
-			report.MinTMA = tma.MinTMA
-			report.MaxTMA = tma.MaxTMA
-		}
-
-		if debits, ok := debitSnapshots[namaLokasi]; ok {
-			report.Debit07 = debits[7]
-			report.Debit12 = debits[12]
-			report.Debit17 = debits[17]
-		}
-
-		reports = append(reports, report)
 	}
 
 	logger.Debug(component, "Daily report data collected", logger.Fields(
 		"stations", len(reports),
-		"tma_records", len(tmaSummary),
-		"debit_snapshots", len(debitSnapshots),
 	))
 
 	excelBuf, filename, err := s.excelService.GenerateDailyReport(reports, now)

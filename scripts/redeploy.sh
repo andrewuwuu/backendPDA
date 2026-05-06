@@ -1,13 +1,19 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
 APP_NAME="pda-monitor"
 DBINIT_NAME="pda-dbinit"
 SERVICE_NAME="pda-monitor.service"
 SYSTEM_INSTALL_DIR="/opt/pda-monitor"
 SYSTEM_USER="pda"
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SCOPE="user"
+GO_BIN="${GO:-go}"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+REPO_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
+if [ "$(id -u)" -eq 0 ]; then
+	SCOPE="system"
+else
+	SCOPE="user"
+fi
 REF=""
 SKIP_PULL="false"
 SKIP_RESTART="false"
@@ -27,8 +33,9 @@ Options:
   -h, --help         Show this help.
 
 Examples:
-  scripts/redeploy.sh --scope user
-  scripts/redeploy.sh --scope system --ref main
+  sh scripts/redeploy.sh --scope user
+  sh scripts/redeploy.sh --scope system --ref main
+  GO=/usr/local/go/bin/go sh scripts/redeploy.sh --scope system
 USAGE
 }
 
@@ -46,6 +53,21 @@ run_root() {
 		"$@"
 	else
 		sudo "$@"
+	fi
+}
+
+require_command() {
+	command -v "$1" >/dev/null 2>&1 || fail "$1 is required but was not found in PATH"
+}
+
+check_prerequisites() {
+	require_command git
+	require_command make
+	require_command install
+	require_command systemctl
+
+	if ! command -v "$GO_BIN" >/dev/null 2>&1; then
+		fail "Go is required but '$GO_BIN' was not found. Install Go, add it to PATH, or run with GO=/path/to/go"
 	fi
 }
 
@@ -95,6 +117,8 @@ parse_args() {
 }
 
 ensure_clean_tree() {
+	git rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "$REPO_DIR is not a git repository"
+
 	if ! git diff --quiet || ! git diff --cached --quiet; then
 		fail "working tree has uncommitted changes; commit, stash, or rerun with --skip-pull"
 	fi
@@ -127,14 +151,12 @@ update_from_github() {
 
 build_binaries() {
 	log "Building ${APP_NAME} and ${DBINIT_NAME}"
-	make build-server build-dbinit
+	make GO="$GO_BIN" build-server build-dbinit
 }
 
 install_user() {
 	log "Installing user-level binaries"
-	install -d -m 0755 "$HOME/.local/bin"
-	install -d -m 0755 "$HOME/.local/share/pda-monitor"
-	install -d -m 0755 "$HOME/.config/pda-monitor"
+	mkdir -p "$HOME/.local/bin" "$HOME/.local/share/pda-monitor" "$HOME/.config/pda-monitor"
 	install -m 0755 "$REPO_DIR/bin/$APP_NAME" "$HOME/.local/bin/$APP_NAME"
 	install -m 0755 "$REPO_DIR/bin/$DBINIT_NAME" "$HOME/.local/bin/$DBINIT_NAME"
 
@@ -182,6 +204,7 @@ main() {
 	parse_args "$@"
 	cd "$REPO_DIR"
 
+	check_prerequisites
 	update_from_github
 	build_binaries
 

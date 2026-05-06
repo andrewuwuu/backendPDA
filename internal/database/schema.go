@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/jmoiron/sqlx"
 )
@@ -105,10 +106,48 @@ CREATE TABLE IF NOT EXISTS station_alert_levels (
 	},
 }
 
+var indexStatements = []struct {
+	name    string
+	table   string
+	columns []string
+	query   string
+}{
+	{
+		name:    "idx_hourly_readings_hour_bucket_nama_lokasi_recorded_at",
+		table:   "hourly_readings",
+		columns: []string{"hour_bucket", "nama_lokasi", "recorded_at"},
+		query:   `CREATE INDEX idx_hourly_readings_hour_bucket_nama_lokasi_recorded_at ON hourly_readings (hour_bucket, nama_lokasi, recorded_at)`,
+	},
+	{
+		name:    "idx_hourly_readings_recorded_at_nama_lokasi",
+		table:   "hourly_readings",
+		columns: []string{"recorded_at", "nama_lokasi"},
+		query:   `CREATE INDEX idx_hourly_readings_recorded_at_nama_lokasi ON hourly_readings (recorded_at, nama_lokasi)`,
+	},
+	{
+		name:    "idx_formula_params_nama_lokasi_priority_tma_min",
+		table:   "formula_params",
+		columns: []string{"nama_lokasi", "priority", "tma_min"},
+		query:   `CREATE INDEX idx_formula_params_nama_lokasi_priority_tma_min ON formula_params (nama_lokasi, priority, tma_min)`,
+	},
+	{
+		name:    "idx_stations_sungai_nama_lokasi",
+		table:   "stations",
+		columns: []string{"sungai", "nama_lokasi"},
+		query:   `CREATE INDEX idx_stations_sungai_nama_lokasi ON stations (sungai, nama_lokasi)`,
+	},
+}
+
 func InitSchema(ctx context.Context, db *sqlx.DB) error {
 	for _, stmt := range schemaStatements {
 		if _, err := db.ExecContext(ctx, stmt.query); err != nil {
 			return fmt.Errorf("create %s table: %w", stmt.name, err)
+		}
+	}
+
+	for _, stmt := range indexStatements {
+		if err := ensureIndex(ctx, db, stmt.table, stmt.columns, stmt.query); err != nil {
+			return fmt.Errorf("create %s index: %w", stmt.name, err)
 		}
 	}
 
@@ -121,4 +160,57 @@ func TableNames() []string {
 		names = append(names, stmt.name)
 	}
 	return names
+}
+
+func ensureIndex(ctx context.Context, db *sqlx.DB, table string, columns []string, createQuery string) error {
+	rows, err := db.QueryxContext(ctx, `
+        SELECT index_name, seq_in_index, column_name
+        FROM information_schema.statistics
+        WHERE table_schema = DATABASE()
+          AND table_name = ?
+        ORDER BY index_name, seq_in_index`, table)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	indexColumns := make(map[string][]string)
+	for rows.Next() {
+		var indexName string
+		var seqInIndex int
+		var columnName string
+		if err := rows.Scan(&indexName, &seqInIndex, &columnName); err != nil {
+			return err
+		}
+		indexColumns[indexName] = append(indexColumns[indexName], columnName)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, existingColumns := range indexColumns {
+		if sameColumnList(existingColumns, columns) {
+			return nil
+		}
+	}
+
+	if _, err := db.ExecContext(ctx, createQuery); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func sameColumnList(existing, expected []string) bool {
+	if len(existing) != len(expected) {
+		return false
+	}
+
+	for i := range expected {
+		if !strings.EqualFold(existing[i], expected[i]) {
+			return false
+		}
+	}
+
+	return true
 }

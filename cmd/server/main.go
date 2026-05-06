@@ -8,8 +8,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	_ "github.com/go-sql-driver/mysql"
-	"github.com/gorilla/mux"
 	"github.com/jmoiron/sqlx"
 
 	"pda-monitor/internal/auth"
@@ -83,6 +83,7 @@ func main() {
 	)
 
 	readingService := service.NewReadingService(readingRepo, calculator)
+	reportService := service.NewReportService(stationRepo, readingService)
 	excelService := report.NewExcelReportService()
 
 	go func() {
@@ -128,10 +129,10 @@ func main() {
 	sched := scheduler.NewScheduler(
 		telemetryService,
 		readingService,
+		reportService,
 		calculator,
 		telegram,
 		excelService,
-		stationRepo,
 	)
 	if err := sched.Start(); err != nil {
 		logger.Fatal(component, "Failed to start scheduler", logger.F("error", err.Error()))
@@ -141,6 +142,7 @@ func main() {
 	apiHandler := handler.NewAPIHandler(
 		telemetryService,
 		readingService,
+		reportService,
 		calculator,
 		stationRepo,
 		formulaRepo,
@@ -150,14 +152,15 @@ func main() {
 		excelService,
 	)
 
-	router := mux.NewRouter()
-	apiHandler.RegisterRoutes(router)
+	router := chi.NewRouter()
 	router.Use(loggingMiddleware, corsMiddleware)
 
-	router.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	router.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
-	}).Methods("GET")
+	})
+
+	apiHandler.RegisterRoutes(router)
 
 	server := &http.Server{
 		Addr:         ":" + cfg.Server.Port,

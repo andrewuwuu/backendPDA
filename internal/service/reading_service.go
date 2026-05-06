@@ -1,159 +1,144 @@
 package service
 
 import (
-    "context"
-    "log"
-    "time"
+	"context"
+	"fmt"
+	"time"
 
-    "pda-monitor/internal/domain"
-    "pda-monitor/internal/repository"
+	"pda-monitor/internal/domain"
+	"pda-monitor/internal/repository"
+	"pda-monitor/internal/timeutil"
 )
 
-var jakartaLoc *time.Location
-
-func init() {
-    var err error
-    jakartaLoc, err = time.LoadLocation("Asia/Jakarta")
-    if err != nil {
-        jakartaLoc = time.FixedZone("WIB", 7*60*60)
-    }
-}
-
 type ReadingService struct {
-    readingRepo repository.ReadingRepository
-    calculator  *DebitCalculator
+	readingRepo repository.ReadingRepository
+	calculator  *DebitCalculator
 }
 
 func NewReadingService(
-    readingRepo repository.ReadingRepository,
-    calculator *DebitCalculator,
+	readingRepo repository.ReadingRepository,
+	calculator *DebitCalculator,
 ) *ReadingService {
-    return &ReadingService{
-        readingRepo: readingRepo,
-        calculator:  calculator,
-    }
+	return &ReadingService{
+		readingRepo: readingRepo,
+		calculator:  calculator,
+	}
 }
 
 func (s *ReadingService) ProcessAndStoreReadings(ctx context.Context, records []domain.PDARecord) (int, error) {
-    if len(records) == 0 {
-        return 0, nil
-    }
+	if len(records) == 0 {
+		return 0, nil
+	}
 
-    now := time.Now()
-    hourBucket := truncateToHour(now)
+	now := time.Now()
+	hourBucket := timeutil.TruncateToHour(now)
+	results, err := s.calculator.CalculateBatch(ctx, records)
+	if err != nil {
+		return 0, fmt.Errorf("calculate batch debit: %w", err)
+	}
 
-    readings := make([]domain.HourlyReading, 0, len(records))
+	readings := make([]domain.HourlyReading, 0, len(records))
+	for i, record := range records {
+		result := results[i]
+		var debit *float64
+		if result.IsValid {
+			debit = &result.Debit
+		}
 
-    for _, record := range records {
-        result, err := s.calculator.Calculate(ctx, record)
-        if err != nil {
-            log.Printf("Error calculating debit for %s: %v", record.NamaLokasi, err)
-            continue
-        }
+		readings = append(readings, domain.HourlyReading{
+			NamaLokasi: record.NamaLokasi,
+			HourBucket: hourBucket,
+			RecordedAt: record.RecordedAt,
+			WLevel:     record.WLevel,
+			TMA:        record.TMA,
+			Debit:      debit,
+			IsValid:    result.IsValid,
+			Rain:       record.Rain,
+		})
+	}
 
-        var debit *float64
-        if result.IsValid {
-            debit = &result.Debit
-        }
+	if err := s.readingRepo.BulkInsertReadings(ctx, readings); err != nil {
+		return 0, err
+	}
 
-        readings = append(readings, domain.HourlyReading{
-            NamaLokasi: record.NamaLokasi,
-            HourBucket: hourBucket,
-            RecordedAt: record.RecordedAt,
-            WLevel:     record.WLevel,
-            TMA:        record.TMA,
-            Debit:      debit,
-            IsValid:    result.IsValid,
-            Rain:       record.Rain,
-        })
-    }
-
-    if err := s.readingRepo.BulkInsertReadings(ctx, readings); err != nil {
-        return 0, err
-    }
-
-    return len(readings), nil
+	return len(readings), nil
 }
 
 func (s *ReadingService) GetCurrentHourData(ctx context.Context) ([]domain.HourlyReading, error) {
-    return s.readingRepo.GetCurrentHourReadings(ctx)
+	return s.readingRepo.GetCurrentHourReadings(ctx)
 }
 
 func (s *ReadingService) GetCurrentHourByStation(ctx context.Context, namaLokasi string) ([]domain.HourlyReading, error) {
-    return s.readingRepo.GetCurrentHourByStation(ctx, namaLokasi)
+	return s.readingRepo.GetCurrentHourByStation(ctx, namaLokasi)
 }
 
 func (s *ReadingService) GetCurrentHourSummary(ctx context.Context) ([]domain.HourlySummary, error) {
-    return s.readingRepo.GetHourlySummary(ctx)
+	return s.readingRepo.GetHourlySummary(ctx)
 }
 
 func (s *ReadingService) GetLatestReadings(ctx context.Context) ([]domain.HourlyReading, error) {
-    return s.readingRepo.GetLatestReadingPerStation(ctx)
+	return s.readingRepo.GetLatestReadingPerStation(ctx)
 }
 
 func (s *ReadingService) CleanupOldData(ctx context.Context, hoursToKeep int) (int64, error) {
-    return s.readingRepo.CleanupOldReadings(ctx, hoursToKeep)
+	return s.readingRepo.CleanupOldReadings(ctx, hoursToKeep)
 }
 
 func (s *ReadingService) GetDailyTMASummary(ctx context.Context, date time.Time) (map[string]domain.TMARangeSummary, error) {
-    summaries, err := s.readingRepo.GetTMARangeForDay(ctx, date, 7, 17)
-    if err != nil {
-        return nil, err
-    }
+	summaries, err := s.readingRepo.GetTMARangeForDay(ctx, date, 7, 17)
+	if err != nil {
+		return nil, err
+	}
 
-    result := make(map[string]domain.TMARangeSummary)
-    for _, summary := range summaries {
-        result[summary.NamaLokasi] = summary
-    }
+	result := make(map[string]domain.TMARangeSummary)
+	for _, summary := range summaries {
+		result[summary.NamaLokasi] = summary
+	}
 
-    return result, nil
+	return result, nil
 }
 
 func (s *ReadingService) GetDebitSnapshots(ctx context.Context, date time.Time, hours []int) (map[string]map[int]*float64, error) {
-    snapshots, err := s.readingRepo.GetDebitAtHours(ctx, date, hours)
-    if err != nil {
-        return nil, err
-    }
+	snapshots, err := s.readingRepo.GetDebitAtHours(ctx, date, hours)
+	if err != nil {
+		return nil, err
+	}
 
-    result := make(map[string]map[int]*float64)
-    for _, snap := range snapshots {
-        if result[snap.NamaLokasi] == nil {
-            result[snap.NamaLokasi] = make(map[int]*float64)
-        }
-        result[snap.NamaLokasi][snap.Hour] = snap.Debit
-    }
+	result := make(map[string]map[int]*float64)
+	for _, snap := range snapshots {
+		if result[snap.NamaLokasi] == nil {
+			result[snap.NamaLokasi] = make(map[int]*float64)
+		}
+		result[snap.NamaLokasi][snap.Hour] = snap.Debit
+	}
 
-    return result, nil
+	return result, nil
 }
 
 func (s *ReadingService) GetReadingsByTimeRange(ctx context.Context, namaLokasi string, from, to time.Time) ([]domain.HourlyReading, error) {
-    return s.readingRepo.GetReadingsByTimeRange(ctx, namaLokasi, from, to)
+	return s.readingRepo.GetReadingsByTimeRange(ctx, namaLokasi, from, to)
 }
 
 func (s *ReadingService) GetAllReadingsByTimeRange(ctx context.Context, from, to time.Time) ([]domain.HourlyReading, error) {
-    return s.readingRepo.GetAllReadingsByTimeRange(ctx, from, to)
+	return s.readingRepo.GetAllReadingsByTimeRange(ctx, from, to)
 }
 
 func (s *ReadingService) RecalculateDebit(ctx context.Context, namaLokasi string) error {
-    readings, err := s.readingRepo.GetCurrentHourByStation(ctx, namaLokasi)
-    if err != nil {
-        return err
-    }
+	readings, err := s.readingRepo.GetCurrentHourByStation(ctx, namaLokasi)
+	if err != nil {
+		return err
+	}
 
-    for i := range readings {
-        debit, valid, _ := s.calculator.CalculateWithTMA(ctx, readings[i].NamaLokasi, readings[i].TMA)
-        if valid {
-            readings[i].Debit = &debit
-            readings[i].IsValid = true
-        } else {
-            readings[i].Debit = nil
-            readings[i].IsValid = false
-        }
-    }
+	for i := range readings {
+		debit, valid, _ := s.calculator.CalculateWithTMA(ctx, readings[i].NamaLokasi, readings[i].TMA)
+		if valid {
+			readings[i].Debit = &debit
+			readings[i].IsValid = true
+		} else {
+			readings[i].Debit = nil
+			readings[i].IsValid = false
+		}
+	}
 
-    return s.readingRepo.BulkInsertReadings(ctx, readings)
-}
-
-func truncateToHour(t time.Time) time.Time {
-    return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, t.Location())
+	return s.readingRepo.BulkInsertReadings(ctx, readings)
 }

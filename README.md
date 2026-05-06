@@ -8,8 +8,10 @@ Lightweight Go-based telemetry monitor that ingests third-party telemetry data, 
 
 * Telemetry data ingestion from external API
 * REST API for downstream consumers
+* JWT-based authentication with protected admin routes
+* Formula and alert-level management endpoints
 * Telegram bot notifications
-* XLSX-style reporting output
+* Daily and weekly XLSX reporting output
 * MariaDB/MySQL backend
 * Fully `.env`-driven configuration
 * User-level `systemd` service (no root required)
@@ -20,7 +22,7 @@ Lightweight Go-based telemetry monitor that ingests third-party telemetry data, 
 
 * **Language:** Go
 * **Database:** MariaDB / MySQL
-* **API Style:** REST
+* **API Style:** REST over Chi
 * **Messaging:** Telegram Bot API
 * **Process Manager:** systemd (user-level)
 
@@ -55,7 +57,15 @@ Lightweight Go-based telemetry monitor that ingests third-party telemetry data, 
 │   │   ├── station.go
 │   │   └── user.go
 │   ├── handler/
-│   │   └── api_handler.go
+│   │   ├── alert_handler.go
+│   │   ├── api_handler.go
+│   │   ├── auth_handler.go
+│   │   ├── export_handler.go
+│   │   ├── formula_handler.go
+│   │   ├── reading_handler.go
+│   │   └── station_handler.go
+│   ├── httpx/
+│   │   └── httpx.go
 │   ├── logger/
 │   │   └── logger.go
 │   ├── middleware/
@@ -79,12 +89,37 @@ Lightweight Go-based telemetry monitor that ingests third-party telemetry data, 
 │   ├── service/
 │   │   ├── debit_calculator.go
 │   │   ├── reading_service.go
+│   │   ├── report_service.go
 │   │   └── telemetry_service.go
+│   ├── timeutil/
+│   │   └── timeutil.go
 │   └── util/
 │       └── station.go
 ├── Makefile
-└── README.md
+├── planning/
+│   └── backend-performance-sql-revision-plan.md
+└── scripts/
+    ├── apply-system-dbinit.sh
+    ├── redeploy-system-with-dbinit.sh
+    └── redeploy.sh
 ```
+
+---
+
+## API Overview
+
+Protected API routes are mounted under `/api` and require JWT authentication, except for `POST /api/auth/login`.
+
+Primary route groups:
+
+* `/api/readings/*` for current, latest, station-specific, and historical readings
+* `/api/pda/*` for realtime and historical telemetry with debit calculation
+* `/api/stations/*` for station listing and sync
+* `/api/formulas/*` for rating-curve retrieval and admin-managed updates
+* `/api/alert-levels/*` for alert threshold retrieval and admin-managed updates
+* `/api/export/*` for daily and weekly XLSX exports
+
+Admin-only write routes are enforced through the JWT role middleware.
 
 ---
 
@@ -263,6 +298,8 @@ make build-dbinit  # Build DB init CLI to ./bin
 make install-user  # Install binary to ~/.local/bin
 make redeploy-user # Pull latest GitHub changes, rebuild, install for current user, restart user service
 make redeploy-system # Pull latest GitHub changes, rebuild, install under /opt, restart root service
+make apply-system-dbinit # Run installed /opt/pda-monitor/pda-dbinit against /opt/pda-monitor/.env
+make redeploy-system-db # System-wide redeploy, then apply dbinit patch, then restart service
 make clean         # Remove build output
 ```
 
@@ -274,26 +311,44 @@ It requires a clean working tree before pulling from GitHub.
 User-level redeploy:
 
 ```bash
-./scripts/redeploy.sh --scope user
+sh ./scripts/redeploy.sh --scope user
 ```
 
 System-wide redeploy:
 
 ```bash
-./scripts/redeploy.sh --scope system
+sh ./scripts/redeploy.sh --scope system
 ```
 
 Deploy a specific branch or tag:
 
 ```bash
-./scripts/redeploy.sh --scope system --ref main
+sh ./scripts/redeploy.sh --scope system --ref main
+```
+
+If Go is installed outside `PATH`, pass it explicitly:
+
+```bash
+GO=/usr/local/go/bin/go sh ./scripts/redeploy.sh --scope system
 ```
 
 Useful options:
 
 ```bash
-./scripts/redeploy.sh --scope user --skip-pull     # deploy current checkout
-./scripts/redeploy.sh --scope system --skip-restart # install only
+sh ./scripts/redeploy.sh --scope user --skip-pull      # deploy current checkout
+sh ./scripts/redeploy.sh --scope system --skip-restart # install only
+```
+
+Apply schema/index updates on an existing system-wide install:
+
+```bash
+sh ./scripts/apply-system-dbinit.sh
+```
+
+System-wide redeploy plus dbinit patch:
+
+```bash
+sh ./scripts/redeploy-system-with-dbinit.sh
 ```
 
 ## Database Initialization CLI
@@ -318,6 +373,12 @@ Optional flags:
 ./bin/pda-dbinit -timeout 30s
 ```
 
+For an already-installed root deployment under `/opt/pda-monitor`, prefer the helper script instead of invoking the CLI manually:
+
+```bash
+sh ./scripts/apply-system-dbinit.sh --env-file /opt/pda-monitor/.env
+```
+
 `-env-file` is preferred over putting DB credentials on the command line. Use `-dsn` only for one-off overrides.
 
 This command creates these tables if they do not already exist:
@@ -328,6 +389,15 @@ formula_params
 hourly_readings
 users
 station_alert_levels
+```
+
+It also applies additive schema/index updates used by the current backend performance path, including:
+
+```text
+hourly_readings(hour_bucket, nama_lokasi, recorded_at)
+hourly_readings(recorded_at, nama_lokasi)
+formula_params(nama_lokasi, priority, tma_min)
+stations(sungai, nama_lokasi)
 ```
 
 ---

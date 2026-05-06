@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"pda-monitor/internal/logger"
 )
 
 var (
@@ -47,8 +49,10 @@ func NewJWTManager(expiryHours int) *JWTManager {
 		blacklist:   make(map[string]blacklistEntry),
 	}
 
-	log.Printf("[JWT] Initial key generated (256-bit)")
-	log.Printf("[JWT] Key rotation scheduled every 24 hours")
+	logger.Info("JWT", "Manager initialized", logger.Fields(
+		"key_size", "256-bit",
+		"rotation_interval", "24h",
+	))
 
 	// Start key rotation goroutine
 	go m.startKeyRotation()
@@ -86,7 +90,7 @@ func (m *JWTManager) rotateKey() {
 	m.previousKey = m.currentKey
 	m.currentKey = generateKey()
 
-	log.Printf("[JWT] Key rotated at %s", time.Now().Format(time.RFC3339))
+	logger.Info("JWT", "Key rotated successfully")
 }
 
 func (m *JWTManager) Stop() {

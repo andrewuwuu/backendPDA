@@ -1,28 +1,20 @@
 package handler
 
 import (
-	"archive/zip"
-	"context"
-	"encoding/json"
-	"fmt"
-	"log"
-	"net/http"
-	"strconv"
-	"time"
-
-	"github.com/gorilla/mux"
+	"github.com/go-chi/chi/v5"
 
 	"pda-monitor/internal/auth"
-	"pda-monitor/internal/domain"
 	"pda-monitor/internal/middleware"
 	"pda-monitor/internal/report"
 	"pda-monitor/internal/repository"
 	"pda-monitor/internal/service"
 )
 
+// APIHandler holds all dependencies for HTTP handler methods.
 type APIHandler struct {
 	telemetryService *service.TelemetryService
 	readingService   *service.ReadingService
+	reportService    *service.ReportService
 	calculator       *service.DebitCalculator
 	stationRepo      repository.StationRepository
 	formulaRepo      repository.FormulaRepository
@@ -35,6 +27,7 @@ type APIHandler struct {
 func NewAPIHandler(
 	ts *service.TelemetryService,
 	rs *service.ReadingService,
+	reportSvc *service.ReportService,
 	calc *service.DebitCalculator,
 	stationRepo repository.StationRepository,
 	formulaRepo repository.FormulaRepository,
@@ -46,6 +39,7 @@ func NewAPIHandler(
 	return &APIHandler{
 		telemetryService: ts,
 		readingService:   rs,
+		reportService:    reportSvc,
 		calculator:       calc,
 		stationRepo:      stationRepo,
 		formulaRepo:      formulaRepo,
@@ -56,933 +50,78 @@ func NewAPIHandler(
 	}
 }
 
-func (h *APIHandler) RegisterRoutes(r *mux.Router) {
+// RegisterRoutes registers all API routes on the given Chi router.
+func (h *APIHandler) RegisterRoutes(r chi.Router) {
 	authMiddleware := middleware.NewAuthMiddleware(h.jwtManager)
 
-	api := r.PathPrefix("/api").Subrouter()
+	r.Route("/api", func(api chi.Router) {
+		api.Post("/auth/login", h.Login)
 
-	api.HandleFunc("/auth/login", h.Login).Methods("POST")
+		api.Group(func(protected chi.Router) {
+			protected.Use(authMiddleware.Authenticate)
 
-	protected := api.PathPrefix("").Subrouter()
-	protected.Use(authMiddleware.Authenticate)
+			protected.Post("/auth/logout", h.Logout)
 
-	protected.HandleFunc("/auth/logout", h.Logout).Methods("POST")
+			h.registerReadingRoutes(protected)
+			h.registerStationRoutes(protected)
+			h.registerFormulaRoutes(protected)
+			h.registerAlertLevelRoutes(protected)
+			h.registerExportRoutes(protected)
 
-	protected.HandleFunc("/pda/realtime", h.GetRealtimeWithDebit).Methods("GET")
-	protected.HandleFunc("/pda/historical", h.GetHistoricalWithDebit).Methods("GET")
-
-	protected.HandleFunc("/readings/current", h.GetCurrentHourReadings).Methods("GET")
-	protected.HandleFunc("/readings/current/summary", h.GetCurrentHourSummary).Methods("GET")
-	protected.HandleFunc("/readings/current/latest", h.GetLatestReadings).Methods("GET")
-	protected.HandleFunc("/readings/station/{namaLokasi}", h.GetStationReadings).Methods("GET")
-	protected.HandleFunc("/readings/historical", h.GetHistoricalReadings).Methods("GET")
-
-	protected.HandleFunc("/stations", h.GetStations).Methods("GET")
-	protected.HandleFunc("/stations/{namaLokasi}", h.GetStation).Methods("GET")
-	protected.HandleFunc("/stations/sync", h.SyncStations).Methods("POST")
-
-	protected.HandleFunc("/formulas", h.GetFormulas).Methods("GET")
-	protected.HandleFunc("/formulas/grouped", h.GetFormulasGrouped).Methods("GET")
-	protected.HandleFunc("/formulas/{namaLokasi}", h.GetFormulasByStation).Methods("GET")
-	protected.HandleFunc("/formulas/id/{id}", h.GetFormulaByID).Methods("GET")
-
-	protected.HandleFunc("/alert-levels", h.GetAllAlertLevels).Methods("GET")
-	protected.HandleFunc("/alert-levels/{namaLokasi}", h.GetAlertLevel).Methods("GET")
-	protected.HandleFunc("/alert-levels/filter/{level}", h.GetAlertLevelsByLevel).Methods("GET")
-
-	protected.HandleFunc("/export/daily", h.ExportDailyReport).Methods("GET")
-	protected.HandleFunc("/export/weekly", h.ExportWeeklyReports).Methods("GET")
-
-	adminRoutes := protected.PathPrefix("").Subrouter()
-	adminRoutes.Use(authMiddleware.RequireRole("admin"))
-
-	adminRoutes.HandleFunc("/formulas", h.CreateFormulas).Methods("POST")
-	adminRoutes.HandleFunc("/formulas/{namaLokasi}", h.UpdateStationFormulas).Methods("PUT")
-	adminRoutes.HandleFunc("/formulas/{namaLokasi}", h.DeleteStationFormulas).Methods("DELETE")
-	adminRoutes.HandleFunc("/formulas/id/{id}", h.UpdateFormulaByID).Methods("PUT")
-	adminRoutes.HandleFunc("/formulas/id/{id}", h.DeleteFormulaByID).Methods("DELETE")
-
-	adminRoutes.HandleFunc("/alert-levels/{namaLokasi}", h.UpdateAlertLevel).Methods("PUT")
-	adminRoutes.HandleFunc("/alert-levels", h.BulkUpdateAlertLevels).Methods("PUT")
-	adminRoutes.HandleFunc("/alert-levels/{namaLokasi}", h.DeleteAlertLevel).Methods("DELETE")
-
-	adminRoutes.HandleFunc("/debug/jwt", h.GetJWTInfo).Methods("GET")
-}
-
-func (h *APIHandler) Login(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	var req domain.LoginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.jsonError(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	user, err := h.userRepo.GetByUsername(ctx, req.Username)
-	if err != nil || user == nil {
-		h.jsonError(w, "invalid credentials", http.StatusUnauthorized)
-		return
-	}
-
-	if !h.userRepo.ValidatePassword(user, req.Password) {
-		h.jsonError(w, "invalid credentials", http.StatusUnauthorized)
-		return
-	}
-
-	token, err := h.jwtManager.GenerateToken(user.ID, user.Username, user.Role)
-	if err != nil {
-		h.jsonError(w, "failed to generate token", http.StatusInternalServerError)
-		return
-	}
-
-	h.jsonResponse(w, domain.LoginResponse{
-		Token: token,
-		User:  *user,
-	})
-}
-
-func (h *APIHandler) Logout(w http.ResponseWriter, r *http.Request) {
-	authHeader := r.Header.Get("Authorization")
-	if authHeader == "" || len(authHeader) < 8 {
-		h.jsonError(w, "missing authorization header", http.StatusBadRequest)
-		return
-	}
-
-	tokenString := authHeader[7:]
-
-	if err := h.jwtManager.InvalidateToken(tokenString); err != nil {
-		h.jsonError(w, "failed to invalidate token", http.StatusInternalServerError)
-		return
-	}
-
-	h.jsonResponse(w, map[string]string{
-		"status":  "logged_out",
-		"message": "token has been invalidated",
-	})
-}
-
-func (h *APIHandler) GetJWTInfo(w http.ResponseWriter, r *http.Request) {
-	h.jsonResponse(w, h.jwtManager.GetKeyInfo())
-}
-
-func (h *APIHandler) ExportReport(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	records, err := h.telemetryService.FetchRealtime(ctx)
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	results, err := h.calculator.CalculateBatch(ctx, records)
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	now := time.Now()
-	buf, filename, err := h.excelService.GenerateDebitReport(results, now)
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-	w.Header().Set("Content-Disposition", "attachment; filename="+filename)
-	w.Write(buf.Bytes())
-}
-
-func (h *APIHandler) ExportDailyReport(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	loc, err := time.LoadLocation("Asia/Jakarta")
-	if err != nil {
-		loc = time.FixedZone("WIB", 7*60*60)
-	}
-
-	now := time.Now().In(loc)
-
-	stations, err := h.stationRepo.GetAll(ctx)
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	stationMap := make(map[string]string)
-	for _, st := range stations {
-		stationMap[st.NamaLokasi] = st.NamaAlat
-	}
-
-	tmaSummary, err := h.readingService.GetDailyTMASummary(ctx, now)
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	debitSnapshots, err := h.readingService.GetDebitSnapshots(ctx, now, []int{7, 12, 17})
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	stationNames := make(map[string]bool)
-	for name := range tmaSummary {
-		stationNames[name] = true
-	}
-	for name := range debitSnapshots {
-		stationNames[name] = true
-	}
-
-	var reports []domain.DailyStationReport
-	for namaLokasi := range stationNames {
-		namaAlat := stationMap[namaLokasi]
-		if namaAlat == "" {
-			namaAlat = namaLokasi
-		}
-
-		report := domain.DailyStationReport{
-			NamaLokasi: namaLokasi,
-			NamaAlat:   namaAlat,
-		}
-
-		if tma, ok := tmaSummary[namaLokasi]; ok {
-			report.MinTMA = tma.MinTMA
-			report.MaxTMA = tma.MaxTMA
-		}
-
-		if debits, ok := debitSnapshots[namaLokasi]; ok {
-			report.Debit07 = debits[7]
-			report.Debit12 = debits[12]
-			report.Debit17 = debits[17]
-		}
-
-		reports = append(reports, report)
-	}
-
-	excelBuf, filename, err := h.excelService.GenerateDailyReport(reports, now)
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-	w.Header().Set("Content-Disposition", "attachment; filename="+filename)
-	w.Write(excelBuf.Bytes())
-}
-
-func (h *APIHandler) ExportWeeklyReports(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	loc, err := time.LoadLocation("Asia/Jakarta")
-	if err != nil {
-		loc = time.FixedZone("WIB", 7*60*60)
-	}
-
-	now := time.Now().In(loc)
-
-	stations, err := h.stationRepo.GetAll(ctx)
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	stationMap := make(map[string]string)
-	for _, st := range stations {
-		stationMap[st.NamaLokasi] = st.NamaAlat
-	}
-
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=weekly_reports_%s.zip", now.Format("2006-01-02")))
-
-	zipWriter := zip.NewWriter(w)
-	defer zipWriter.Close()
-
-	for i := 0; i < 7; i++ {
-		reportDate := now.AddDate(0, 0, -i)
-
-		tmaSummary, err := h.readingService.GetDailyTMASummary(ctx, reportDate)
-		if err != nil {
-			continue
-		}
-
-		debitSnapshots, err := h.readingService.GetDebitSnapshots(ctx, reportDate, []int{7, 12, 17})
-		if err != nil {
-			continue
-		}
-
-		stationNames := make(map[string]bool)
-		for name := range tmaSummary {
-			stationNames[name] = true
-		}
-		for name := range debitSnapshots {
-			stationNames[name] = true
-		}
-
-		var reports []domain.DailyStationReport
-		for namaLokasi := range stationNames {
-			namaAlat := stationMap[namaLokasi]
-			if namaAlat == "" {
-				namaAlat = namaLokasi
-			}
-
-			report := domain.DailyStationReport{
-				NamaLokasi: namaLokasi,
-				NamaAlat:   namaAlat,
-			}
-
-			if tma, ok := tmaSummary[namaLokasi]; ok {
-				report.MinTMA = tma.MinTMA
-				report.MaxTMA = tma.MaxTMA
-			}
-
-			if debits, ok := debitSnapshots[namaLokasi]; ok {
-				report.Debit07 = debits[7]
-				report.Debit12 = debits[12]
-				report.Debit17 = debits[17]
-			}
-
-			reports = append(reports, report)
-		}
-
-		excelBuf, filename, err := h.excelService.GenerateDailyReport(reports, reportDate)
-		if err != nil {
-			continue
-		}
-
-		zipFile, err := zipWriter.Create(filename)
-		if err != nil {
-			continue
-		}
-		zipFile.Write(excelBuf.Bytes())
-	}
-}
-
-func (h *APIHandler) GetCurrentHourReadings(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	readings, err := h.readingService.GetCurrentHourData(ctx)
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	h.jsonResponse(w, map[string]interface{}{
-		"hour_bucket":   truncateToHour(time.Now()),
-		"reading_count": len(readings),
-		"readings":      readings,
-	})
-}
-
-func (h *APIHandler) GetCurrentHourSummary(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	summaries, err := h.readingService.GetCurrentHourSummary(ctx)
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	h.jsonResponse(w, map[string]interface{}{
-		"hour_bucket":   truncateToHour(time.Now()),
-		"station_count": len(summaries),
-		"summaries":     summaries,
-	})
-}
-
-func (h *APIHandler) GetLatestReadings(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	readings, err := h.readingService.GetLatestReadings(ctx)
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Fetch all alert levels for computing alert status
-	alertLevels, err := h.alertLevelRepo.GetAll(ctx)
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Build lookup map
-	alertMap := make(map[string]*domain.StationAlertLevel)
-	for i := range alertLevels {
-		alertMap[alertLevels[i].NamaLokasi] = &alertLevels[i]
-	}
-
-	// Compute alert level for each reading
-	results := make([]domain.ReadingWithAlertLevel, len(readings))
-	for i, reading := range readings {
-		results[i] = domain.ReadingWithAlertLevel{
-			HourlyReading: reading,
-			AlertLevel:    domain.DetermineAlertLevel(reading.TMA, alertMap[reading.NamaLokasi]),
-		}
-	}
-
-	h.jsonResponse(w, map[string]interface{}{
-		"hour_bucket":     truncateToHour(time.Now()),
-		"station_count":   len(results),
-		"latest_readings": results,
-	})
-}
-
-func (h *APIHandler) GetStationReadings(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	namaLokasi := mux.Vars(r)["namaLokasi"]
-	readings, err := h.readingService.GetCurrentHourByStation(ctx, namaLokasi)
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	h.jsonResponse(w, map[string]interface{}{
-		"nama_lokasi":   namaLokasi,
-		"hour_bucket":   truncateToHour(time.Now()),
-		"reading_count": len(readings),
-		"readings":      readings,
-	})
-}
-
-func (h *APIHandler) GetHistoricalReadings(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	namaLokasi := r.URL.Query().Get("nama_lokasi")
-	fromStr := r.URL.Query().Get("from")
-	toStr := r.URL.Query().Get("to")
-
-	if fromStr == "" || toStr == "" {
-		h.jsonError(w, "from and to dates are required (format: 2006-01-02T15:04:05)", http.StatusBadRequest)
-		return
-	}
-
-	from, err := time.Parse("2006-01-02T15:04:05", fromStr)
-	if err != nil {
-		from, err = time.Parse("2006-01-02", fromStr)
-		if err != nil {
-			h.jsonError(w, "invalid from date format", http.StatusBadRequest)
-			return
-		}
-	}
-
-	to, err := time.Parse("2006-01-02T15:04:05", toStr)
-	if err != nil {
-		to, err = time.Parse("2006-01-02", toStr)
-		if err != nil {
-			h.jsonError(w, "invalid to date format", http.StatusBadRequest)
-			return
-		}
-		to = to.Add(23*time.Hour + 59*time.Minute + 59*time.Second)
-	}
-
-	var readings []domain.HourlyReading
-	if namaLokasi != "" {
-		readings, err = h.readingService.GetReadingsByTimeRange(ctx, namaLokasi, from, to)
-	} else {
-		readings, err = h.readingService.GetAllReadingsByTimeRange(ctx, from, to)
-	}
-
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	h.jsonResponse(w, map[string]interface{}{
-		"from":          from,
-		"to":            to,
-		"nama_lokasi":   namaLokasi,
-		"reading_count": len(readings),
-		"readings":      readings,
-	})
-}
-
-func (h *APIHandler) GetRealtimeWithDebit(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	records, err := h.telemetryService.FetchRealtime(ctx)
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	results, err := h.calculator.CalculateBatch(ctx, records)
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	h.jsonResponse(w, results)
-}
-
-func (h *APIHandler) GetHistoricalWithDebit(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	namaLokasi := r.URL.Query().Get("nama_lokasi")
-	if namaLokasi == "" {
-		h.jsonError(w, "nama_lokasi is required", http.StatusBadRequest)
-		return
-	}
-
-	from, err := time.Parse("2006-01-02", r.URL.Query().Get("from"))
-	if err != nil {
-		h.jsonError(w, "invalid from date", http.StatusBadRequest)
-		return
-	}
-	to, err := time.Parse("2006-01-02", r.URL.Query().Get("to"))
-	if err != nil {
-		h.jsonError(w, "invalid to date", http.StatusBadRequest)
-		return
-	}
-
-	records, err := h.telemetryService.FetchHistorical(ctx, namaLokasi, from, to)
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	results, err := h.calculator.CalculateBatch(ctx, records)
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	h.jsonResponse(w, results)
-}
-
-func (h *APIHandler) GetStations(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	stations, err := h.stationRepo.GetAll(ctx)
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	h.jsonResponse(w, stations)
-}
-
-func (h *APIHandler) GetStation(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	namaLokasi := mux.Vars(r)["namaLokasi"]
-	station, err := h.stationRepo.GetByNamaLokasi(ctx, namaLokasi)
-	if err != nil || station == nil {
-		h.jsonError(w, "station not found", http.StatusNotFound)
-		return
-	}
-	h.jsonResponse(w, station)
-}
-
-func (h *APIHandler) SyncStations(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	count, err := h.telemetryService.SyncStations(ctx)
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	h.jsonResponse(w, map[string]interface{}{"status": "synced", "count": count})
-}
-
-func (h *APIHandler) GetFormulas(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	formulas, err := h.formulaRepo.GetAll(ctx)
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	h.jsonResponse(w, formulas)
-}
-
-func (h *APIHandler) GetFormulasGrouped(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	grouped, err := h.formulaRepo.GetAllGroupedByStation(ctx)
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	h.jsonResponse(w, grouped)
-}
-
-func (h *APIHandler) GetFormulasByStation(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	namaLokasi := mux.Vars(r)["namaLokasi"]
-	formulas, err := h.formulaRepo.GetAllByNamaLokasi(ctx, namaLokasi)
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	if len(formulas) == 0 {
-		h.jsonError(w, "no formulas found for station", http.StatusNotFound)
-		return
-	}
-
-	h.jsonResponse(w, domain.StationFormulas{
-		NamaLokasi:  namaLokasi,
-		StationName: formulas[0].StationName,
-		Formulas:    formulas,
-	})
-}
-
-func (h *APIHandler) GetFormulaByID(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	idStr := mux.Vars(r)["id"]
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
-		h.jsonError(w, "invalid formula id", http.StatusBadRequest)
-		return
-	}
-
-	formula, err := h.formulaRepo.GetByID(ctx, id)
-	if err != nil {
-		h.jsonError(w, "formula not found", http.StatusNotFound)
-		return
-	}
-	h.jsonResponse(w, formula)
-}
-
-func (h *APIHandler) CreateFormulas(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	var batchReq domain.FormulaCreateRequest
-	decoder := json.NewDecoder(r.Body)
-	if err := decoder.Decode(&batchReq); err != nil {
-		h.jsonError(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if len(batchReq.Formulas) > 0 {
-		if batchReq.NamaLokasi == "" {
-			h.jsonError(w, "nama_lokasi is required", http.StatusBadRequest)
-			return
-		}
-
-		formulas := make([]domain.FormulaParams, len(batchReq.Formulas))
-		for i, f := range batchReq.Formulas {
-			formulas[i] = domain.FormulaParams{
-				NamaLokasi:      batchReq.NamaLokasi,
-				StationName:     batchReq.StationName,
-				C:               f.C,
-				H0:              f.H0,
-				B:               f.B,
-				TMAMin:          f.TMAMin,
-				TMAMinInclusive: f.TMAMinInclusive,
-				TMAMax:          f.TMAMax,
-				TMAMaxInclusive: f.TMAMaxInclusive,
-				Priority:        f.Priority,
-			}
-		}
-
-		if err := h.formulaRepo.CreateBatch(ctx, batchReq.NamaLokasi, formulas); err != nil {
-			h.jsonError(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		recalculated := h.refreshDebitAfterFormulaChange(ctx, batchReq.NamaLokasi)
-		w.WriteHeader(http.StatusCreated)
-		h.jsonResponse(w, map[string]interface{}{
-			"status":       "created",
-			"nama_lokasi":  batchReq.NamaLokasi,
-			"count":        len(formulas),
-			"formulas":     formulas,
-			"recalculated": recalculated,
+			h.registerAdminRoutes(protected, authMiddleware)
 		})
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-
-	if batchReq.NamaLokasi == "" {
-		h.jsonError(w, "nama_lokasi is required", http.StatusBadRequest)
-		return
-	}
-
-	h.jsonError(w, "use formulas array for creating formulas", http.StatusBadRequest)
-}
-
-func (h *APIHandler) UpdateStationFormulas(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	namaLokasi := mux.Vars(r)["namaLokasi"]
-
-	var req domain.FormulaCreateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.jsonError(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if len(req.Formulas) == 0 {
-		h.jsonError(w, "formulas array is required", http.StatusBadRequest)
-		return
-	}
-
-	formulas := make([]domain.FormulaParams, len(req.Formulas))
-	for i, f := range req.Formulas {
-		formulas[i] = domain.FormulaParams{
-			NamaLokasi:      namaLokasi,
-			StationName:     req.StationName,
-			C:               f.C,
-			H0:              f.H0,
-			B:               f.B,
-			TMAMin:          f.TMAMin,
-			TMAMinInclusive: f.TMAMinInclusive,
-			TMAMax:          f.TMAMax,
-			TMAMaxInclusive: f.TMAMaxInclusive,
-			Priority:        f.Priority,
-		}
-	}
-
-	if err := h.formulaRepo.CreateBatch(ctx, namaLokasi, formulas); err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	recalculated := h.refreshDebitAfterFormulaChange(ctx, namaLokasi)
-	h.jsonResponse(w, map[string]interface{}{
-		"status":       "updated",
-		"nama_lokasi":  namaLokasi,
-		"count":        len(formulas),
-		"recalculated": recalculated,
 	})
 }
 
-func (h *APIHandler) UpdateFormulaByID(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	idStr := mux.Vars(r)["id"]
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
-		h.jsonError(w, "invalid formula id", http.StatusBadRequest)
-		return
-	}
+func (h *APIHandler) registerReadingRoutes(r chi.Router) {
+	r.Get("/pda/realtime", h.GetRealtimeWithDebit)
+	r.Get("/pda/historical", h.GetHistoricalWithDebit)
 
-	existing, err := h.formulaRepo.GetByID(ctx, id)
-	if err != nil {
-		h.jsonError(w, "formula not found", http.StatusNotFound)
-		return
-	}
+	r.Get("/readings/current", h.GetCurrentHourReadings)
+	r.Get("/readings/current/summary", h.GetCurrentHourSummary)
+	r.Get("/readings/current/latest", h.GetLatestReadings)
+	r.Get("/readings/station/{namaLokasi}", h.GetStationReadings)
+	r.Get("/readings/historical", h.GetHistoricalReadings)
+}
 
-	var params domain.FormulaParams
-	if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
-		h.jsonError(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
+func (h *APIHandler) registerStationRoutes(r chi.Router) {
+	r.Get("/stations", h.GetStations)
+	r.Post("/stations/sync", h.SyncStations)
+	r.Get("/stations/{namaLokasi}", h.GetStation)
+}
 
-	params.ID = id
-	params.NamaLokasi = existing.NamaLokasi
+func (h *APIHandler) registerFormulaRoutes(r chi.Router) {
+	r.Get("/formulas", h.GetFormulas)
+	r.Get("/formulas/grouped", h.GetFormulasGrouped)
+	r.Get("/formulas/id/{id}", h.GetFormulaByID)
+	r.Get("/formulas/{namaLokasi}", h.GetFormulasByStation)
+}
 
-	if err := h.formulaRepo.Update(ctx, &params); err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+func (h *APIHandler) registerAlertLevelRoutes(r chi.Router) {
+	r.Get("/alert-levels", h.GetAllAlertLevels)
+	r.Get("/alert-levels/filter/{level}", h.GetAlertLevelsByLevel)
+	r.Get("/alert-levels/{namaLokasi}", h.GetAlertLevel)
+}
 
-	recalculated := h.refreshDebitAfterFormulaChange(ctx, params.NamaLokasi)
-	h.jsonResponse(w, map[string]interface{}{
-		"status":       "updated",
-		"recalculated": recalculated,
+func (h *APIHandler) registerExportRoutes(r chi.Router) {
+	r.Get("/export/daily", h.ExportDailyReport)
+	r.Get("/export/weekly", h.ExportWeeklyReports)
+}
+
+func (h *APIHandler) registerAdminRoutes(r chi.Router, authMiddleware *middleware.AuthMiddleware) {
+	r.Group(func(admin chi.Router) {
+		admin.Use(authMiddleware.RequireRole("admin"))
+
+		admin.Post("/formulas", h.CreateFormulas)
+		admin.Put("/formulas/id/{id}", h.UpdateFormulaByID)
+		admin.Delete("/formulas/id/{id}", h.DeleteFormulaByID)
+		admin.Put("/formulas/{namaLokasi}", h.UpdateStationFormulas)
+		admin.Delete("/formulas/{namaLokasi}", h.DeleteStationFormulas)
+
+		admin.Put("/alert-levels/{namaLokasi}", h.UpdateAlertLevel)
+		admin.Put("/alert-levels", h.BulkUpdateAlertLevels)
+		admin.Delete("/alert-levels/{namaLokasi}", h.DeleteAlertLevel)
+
+		admin.Get("/debug/jwt", h.GetJWTInfo)
 	})
-}
-
-func (h *APIHandler) DeleteStationFormulas(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	namaLokasi := mux.Vars(r)["namaLokasi"]
-
-	if err := h.formulaRepo.Delete(ctx, namaLokasi); err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	h.refreshDebitAfterFormulaChange(ctx, namaLokasi)
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *APIHandler) DeleteFormulaByID(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	idStr := mux.Vars(r)["id"]
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
-		h.jsonError(w, "invalid formula id", http.StatusBadRequest)
-		return
-	}
-
-	formula, err := h.formulaRepo.GetByID(ctx, id)
-	if err != nil {
-		h.jsonError(w, "formula not found", http.StatusNotFound)
-		return
-	}
-
-	if err := h.formulaRepo.DeleteByID(ctx, id); err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	h.refreshDebitAfterFormulaChange(ctx, formula.NamaLokasi)
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *APIHandler) refreshDebitAfterFormulaChange(ctx context.Context, namaLokasi string) bool {
-	h.calculator.InvalidateCache(namaLokasi)
-	if h.readingService == nil {
-		return false
-	}
-	if err := h.readingService.RecalculateDebit(ctx, namaLokasi); err != nil {
-		log.Printf("failed to recalculate debit for %s after formula change: %v", namaLokasi, err)
-		return false
-	}
-	return true
-}
-
-func (h *APIHandler) GetAllAlertLevels(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	alerts, err := h.alertLevelRepo.GetAll(ctx)
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	h.jsonResponse(w, map[string]interface{}{
-		"count":        len(alerts),
-		"alert_levels": alerts,
-	})
-}
-
-func (h *APIHandler) GetAlertLevel(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	namaLokasi := mux.Vars(r)["namaLokasi"]
-
-	alert, err := h.alertLevelRepo.GetByNamaLokasi(ctx, namaLokasi)
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	if alert == nil {
-		h.jsonResponse(w, map[string]interface{}{
-			"nama_lokasi": namaLokasi,
-			"alert_level": domain.AlertLevelNormal,
-			"message":     "no custom alert level set, defaulting to normal",
-		})
-		return
-	}
-
-	h.jsonResponse(w, alert)
-}
-
-func (h *APIHandler) GetAlertLevelsByLevel(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	levelStr := mux.Vars(r)["level"]
-	level := domain.AlertLevel(levelStr)
-
-	if !level.IsValid() {
-		h.jsonError(w, "invalid alert level, must be one of: normal, siaga, waspada, awas", http.StatusBadRequest)
-		return
-	}
-
-	alerts, err := h.alertLevelRepo.GetByAlertLevel(ctx, level)
-	if err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	h.jsonResponse(w, map[string]interface{}{
-		"level":        level,
-		"count":        len(alerts),
-		"alert_levels": alerts,
-	})
-}
-
-func (h *APIHandler) UpdateAlertLevel(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	namaLokasi := mux.Vars(r)["namaLokasi"]
-
-	claims := middleware.GetUserFromContext(ctx)
-	if claims == nil {
-		h.jsonError(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	var req domain.AlertLevelUpdateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.jsonError(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	station, err := h.stationRepo.GetByNamaLokasi(ctx, namaLokasi)
-	if err != nil || station == nil {
-		h.jsonError(w, "station not found", http.StatusNotFound)
-		return
-	}
-
-	alert := &domain.StationAlertLevel{
-		NamaLokasi:        namaLokasi,
-		AlertLevel:        domain.AlertLevelNormal,
-		UpperLimitNormal:  req.UpperLimitNormal,
-		UpperLimitSiaga:   req.UpperLimitSiaga,
-		UpperLimitWaspada: req.UpperLimitWaspada,
-		UpperLimitAwas:    req.UpperLimitAwas,
-		UpdatedBy:         claims.Username,
-	}
-
-	if err := h.alertLevelRepo.Upsert(ctx, alert); err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	h.jsonResponse(w, map[string]interface{}{
-		"status":      "updated",
-		"nama_lokasi": namaLokasi,
-		"updated_by":  claims.Username,
-	})
-}
-
-func (h *APIHandler) BulkUpdateAlertLevels(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	claims := middleware.GetUserFromContext(ctx)
-	if claims == nil {
-		h.jsonError(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	var req domain.BulkAlertLevelUpdateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.jsonError(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if len(req.Updates) == 0 {
-		h.jsonError(w, "updates array is required", http.StatusBadRequest)
-		return
-	}
-
-	alerts := make([]domain.StationAlertLevel, 0, len(req.Updates))
-	for _, u := range req.Updates {
-		alerts = append(alerts, domain.StationAlertLevel{
-			NamaLokasi:        u.NamaLokasi,
-			AlertLevel:        domain.AlertLevelNormal,
-			UpperLimitNormal:  u.UpperLimitNormal,
-			UpperLimitSiaga:   u.UpperLimitSiaga,
-			UpperLimitWaspada: u.UpperLimitWaspada,
-			UpperLimitAwas:    u.UpperLimitAwas,
-			UpdatedBy:         claims.Username,
-		})
-	}
-
-	if err := h.alertLevelRepo.UpsertBatch(ctx, alerts); err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	h.jsonResponse(w, map[string]interface{}{
-		"status":     "updated",
-		"count":      len(alerts),
-		"updated_by": claims.Username,
-	})
-}
-
-func (h *APIHandler) DeleteAlertLevel(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	namaLokasi := mux.Vars(r)["namaLokasi"]
-
-	if err := h.alertLevelRepo.Delete(ctx, namaLokasi); err != nil {
-		h.jsonError(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *APIHandler) jsonResponse(w http.ResponseWriter, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(data)
-}
-
-func (h *APIHandler) jsonError(w http.ResponseWriter, message string, status int) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{"error": message})
-}
-
-func truncateToHour(t time.Time) time.Time {
-	return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, t.Location())
 }

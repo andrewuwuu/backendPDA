@@ -44,5 +44,11 @@ redeploy-user:
 redeploy-system:
 	./scripts/redeploy.sh --scope system
 
+apply-system-dbinit:
+	./scripts/apply-system-dbinit.sh
+
+redeploy-system-db:
+	./scripts/redeploy-system-with-dbinit.sh
+
 clean:
 	rm -rf $(BIN_DIR)
