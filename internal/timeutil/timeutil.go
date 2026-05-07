@@ -32,3 +32,9 @@ func NowJakarta() time.Time {
 func TruncateToHour(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, t.Location())
 }
+
+// TruncateToJakartaHour converts a time to the Jakarta timezone and truncates
+// it to the beginning of its hour.
+func TruncateToJakartaHour(t time.Time) time.Time {
+	return TruncateToHour(t.In(JakartaLocation()))
+}

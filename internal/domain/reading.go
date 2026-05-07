@@ -39,6 +39,13 @@ type HourlyDebitSnapshot struct {
 	TMA        float64  `json:"tma" db:"tma"`
 }
 
+type HourlyDebitSnapshotRow struct {
+	NamaLokasi string   `db:"nama_lokasi"`
+	Hour       int      `db:"hour"`
+	Debit      *float64 `db:"debit"`
+	TMA        float64  `db:"tma"`
+}
+
 type DailyStationReport struct {
 	NamaLokasi string
 	NamaAlat   string

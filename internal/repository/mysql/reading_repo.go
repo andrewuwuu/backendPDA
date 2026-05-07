@@ -78,7 +78,7 @@ func (r *ReadingRepo) BulkInsertReadings(ctx context.Context, readings []domain.
 
 func (r *ReadingRepo) GetCurrentHourReadings(ctx context.Context) ([]domain.HourlyReading, error) {
 	var readings []domain.HourlyReading
-	hourBucket := timeutil.TruncateToHour(time.Now())
+	hourBucket := timeutil.TruncateToJakartaHour(time.Now())
 
 	query := `SELECT ` + hourlyReadingColumns + ` FROM hourly_readings WHERE hour_bucket = ? ORDER BY nama_lokasi, recorded_at DESC`
 	err := r.db.SelectContext(ctx, &readings, query, hourBucket)
@@ -87,7 +87,7 @@ func (r *ReadingRepo) GetCurrentHourReadings(ctx context.Context) ([]domain.Hour
 
 func (r *ReadingRepo) GetCurrentHourByStation(ctx context.Context, namaLokasi string) ([]domain.HourlyReading, error) {
 	var readings []domain.HourlyReading
-	hourBucket := timeutil.TruncateToHour(time.Now())
+	hourBucket := timeutil.TruncateToJakartaHour(time.Now())
 
 	query := `SELECT ` + hourlyReadingColumns + ` FROM hourly_readings WHERE nama_lokasi = ? AND hour_bucket = ? ORDER BY recorded_at DESC`
 	err := r.db.SelectContext(ctx, &readings, query, namaLokasi, hourBucket)
@@ -96,7 +96,7 @@ func (r *ReadingRepo) GetCurrentHourByStation(ctx context.Context, namaLokasi st
 
 func (r *ReadingRepo) GetHourlySummary(ctx context.Context) ([]domain.HourlySummary, error) {
 	var summaries []domain.HourlySummary
-	hourBucket := timeutil.TruncateToHour(time.Now())
+	hourBucket := timeutil.TruncateToJakartaHour(time.Now())
 
 	query := `
         SELECT
@@ -120,7 +120,7 @@ func (r *ReadingRepo) GetHourlySummary(ctx context.Context) ([]domain.HourlySumm
 
 func (r *ReadingRepo) GetLatestReadingPerStation(ctx context.Context) ([]domain.HourlyReading, error) {
 	var readings []domain.HourlyReading
-	hourBucket := timeutil.TruncateToHour(time.Now())
+	hourBucket := timeutil.TruncateToJakartaHour(time.Now())
 
 	query := `
         SELECT
@@ -149,7 +149,7 @@ func (r *ReadingRepo) GetLatestReadingPerStation(ctx context.Context) ([]domain.
 }
 
 func (r *ReadingRepo) CleanupOldReadings(ctx context.Context, hoursToKeep int) (int64, error) {
-	cutoff := timeutil.TruncateToHour(time.Now()).Add(-time.Duration(hoursToKeep) * time.Hour)
+	cutoff := timeutil.TruncateToJakartaHour(time.Now()).Add(-time.Duration(hoursToKeep) * time.Hour)
 
 	query := `DELETE FROM hourly_readings WHERE hour_bucket < ?`
 	result, err := r.db.ExecContext(ctx, query, cutoff)
@@ -187,38 +187,49 @@ func (r *ReadingRepo) GetDebitAtHours(ctx context.Context, date time.Time, hours
 	}
 
 	loc := timeutil.JakartaLocation()
-	hourBuckets := make([]time.Time, 0, len(hours))
-	for _, hour := range hours {
-		hourBuckets = append(hourBuckets, time.Date(date.Year(), date.Month(), date.Day(), hour, 0, 0, 0, loc))
-	}
+	startTime := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
+	endTime := startTime.Add(24 * time.Hour)
 
 	query, args, err := sqlx.In(`
         SELECT
             hr.nama_lokasi,
-            HOUR(hr.hour_bucket) as hour,
+            latest.target_hour as hour,
             hr.debit,
             hr.tma
         FROM hourly_readings hr
         INNER JOIN (
-            SELECT nama_lokasi, hour_bucket, MAX(recorded_at) as max_recorded_at
+            SELECT nama_lokasi, HOUR(recorded_at) as target_hour, MAX(recorded_at) as max_recorded_at
             FROM hourly_readings
-            WHERE hour_bucket IN (?)
-            GROUP BY nama_lokasi, hour_bucket
+            WHERE recorded_at >= ?
+              AND recorded_at < ?
+              AND HOUR(recorded_at) IN (?)
+              AND is_valid = TRUE
+              AND debit IS NOT NULL
+            GROUP BY nama_lokasi, HOUR(recorded_at)
         ) latest ON hr.nama_lokasi = latest.nama_lokasi
-               AND hr.hour_bucket = latest.hour_bucket
+               AND HOUR(hr.recorded_at) = latest.target_hour
                AND hr.recorded_at = latest.max_recorded_at
-        WHERE hr.hour_bucket IN (?)
-        ORDER BY hr.nama_lokasi, hr.hour_bucket`, hourBuckets, hourBuckets)
+        ORDER BY hr.nama_lokasi, latest.target_hour`, startTime, endTime, hours)
 	if err != nil {
 		return nil, err
 	}
 
 	query = r.db.Rebind(query)
 
-	var snapshots []domain.HourlyDebitSnapshot
-	err = r.db.SelectContext(ctx, &snapshots, query, args...)
+	var rows []domain.HourlyDebitSnapshotRow
+	err = r.db.SelectContext(ctx, &rows, query, args...)
 	if err != nil {
 		return nil, err
+	}
+
+	snapshots := make([]domain.HourlyDebitSnapshot, 0, len(rows))
+	for _, row := range rows {
+		snapshots = append(snapshots, domain.HourlyDebitSnapshot{
+			NamaLokasi: row.NamaLokasi,
+			Hour:       row.Hour,
+			Debit:      row.Debit,
+			TMA:        row.TMA,
+		})
 	}
 
 	return snapshots, nil

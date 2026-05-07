@@ -30,8 +30,6 @@ func (s *ReadingService) ProcessAndStoreReadings(ctx context.Context, records []
 		return 0, nil
 	}
 
-	now := time.Now()
-	hourBucket := timeutil.TruncateToHour(now)
 	results, err := s.calculator.CalculateBatch(ctx, records)
 	if err != nil {
 		return 0, fmt.Errorf("calculate batch debit: %w", err)
@@ -47,7 +45,7 @@ func (s *ReadingService) ProcessAndStoreReadings(ctx context.Context, records []
 
 		readings = append(readings, domain.HourlyReading{
 			NamaLokasi: record.NamaLokasi,
-			HourBucket: hourBucket,
+			HourBucket: timeutil.TruncateToJakartaHour(record.RecordedAt),
 			RecordedAt: record.RecordedAt,
 			WLevel:     record.WLevel,
 			TMA:        record.TMA,

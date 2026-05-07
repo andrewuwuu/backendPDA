@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"pda-monitor/internal/domain"
+	"pda-monitor/internal/timeutil"
 )
 
 type fakeReadingRepo struct {
@@ -106,5 +107,52 @@ func TestReadingServiceRecalculateDebitUpdatesCurrentHourRows(t *testing.T) {
 	}
 	if *readings.saved[0].Debit != 12 {
 		t.Fatalf("debit = %v, want 12", *readings.saved[0].Debit)
+	}
+}
+
+func TestReadingServiceProcessAndStoreReadingsUsesRecordedAtJakartaHourBucket(t *testing.T) {
+	readings := &fakeReadingRepo{}
+	formulas := &fakeFormulaRepo{formulas: map[string][]domain.FormulaParams{
+		"pda-test": {
+			{
+				NamaLokasi:      "pda-test",
+				C:               1,
+				H0:              0,
+				B:               1,
+				TMAMin:          0,
+				TMAMinInclusive: true,
+				TMAMax:          10,
+				TMAMaxInclusive: true,
+				Priority:        1,
+			},
+		},
+	}}
+	service := NewReadingService(readings, NewDebitCalculator(formulas))
+
+	recordedAt := time.Date(2024, 6, 15, 7, 42, 11, 0, time.UTC)
+	records := []domain.PDARecord{
+		{
+			NamaLokasi: "pda-test",
+			NamaAlat:   "PDA Test",
+			WLevel:     100,
+			TMA:        1,
+			RecordedAt: recordedAt,
+		},
+	}
+
+	if _, err := service.ProcessAndStoreReadings(context.Background(), records); err != nil {
+		t.Fatalf("ProcessAndStoreReadings returned error: %v", err)
+	}
+
+	if len(readings.saved) != 1 {
+		t.Fatalf("saved readings = %d, want 1", len(readings.saved))
+	}
+
+	expectedBucket := timeutil.TruncateToJakartaHour(recordedAt)
+	if !readings.saved[0].HourBucket.Equal(expectedBucket) {
+		t.Fatalf("hour bucket = %v, want %v", readings.saved[0].HourBucket, expectedBucket)
+	}
+	if readings.saved[0].HourBucket.Location() != timeutil.JakartaLocation() {
+		t.Fatalf("expected Jakarta hour bucket location, got %v", readings.saved[0].HourBucket.Location())
 	}
 }

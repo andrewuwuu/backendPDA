@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"pda-monitor/internal/domain"
+	"pda-monitor/internal/timeutil"
 )
 
 type RealtimeResponse struct {
@@ -179,5 +180,5 @@ func (p *TelemetryParser) parseDateTime(dateStr, timeStr string) (time.Time, err
 	}
 
 	dateTimeStr := fmt.Sprintf("%s %s", dateStr, timeStr)
-	return time.ParseInLocation("2006-01-02 15:04:05", dateTimeStr, time.Local)
+	return time.ParseInLocation("2006-01-02 15:04:05", dateTimeStr, timeutil.JakartaLocation())
 }

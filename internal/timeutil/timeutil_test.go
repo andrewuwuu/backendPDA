@@ -76,3 +76,17 @@ func TestTruncateToHour(t *testing.T) {
 		})
 	}
 }
+
+func TestTruncateToJakartaHour(t *testing.T) {
+	input := time.Date(2024, 6, 15, 8, 30, 45, 0, time.UTC)
+
+	result := TruncateToJakartaHour(input)
+
+	expected := time.Date(2024, 6, 15, 15, 0, 0, 0, JakartaLocation())
+	if !result.Equal(expected) {
+		t.Fatalf("TruncateToJakartaHour(%v) = %v, want %v", input, result, expected)
+	}
+	if result.Location() != JakartaLocation() {
+		t.Fatalf("expected Jakarta location, got %v", result.Location())
+	}
+}
