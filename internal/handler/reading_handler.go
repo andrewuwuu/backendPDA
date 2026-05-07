@@ -11,6 +11,10 @@ import (
 	"pda-monitor/internal/timeutil"
 )
 
+func currentJakartaHourBucket() time.Time {
+	return timeutil.TruncateToJakartaHour(time.Now())
+}
+
 func (h *APIHandler) GetCurrentHourReadings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	readings, err := h.readingService.GetCurrentHourData(ctx)
@@ -19,7 +23,7 @@ func (h *APIHandler) GetCurrentHourReadings(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]interface{}{
-		"hour_bucket":   timeutil.TruncateToHour(time.Now()),
+		"hour_bucket":   currentJakartaHourBucket(),
 		"reading_count": len(readings),
 		"readings":      readings,
 	})
@@ -33,7 +37,7 @@ func (h *APIHandler) GetCurrentHourSummary(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]interface{}{
-		"hour_bucket":   timeutil.TruncateToHour(time.Now()),
+		"hour_bucket":   currentJakartaHourBucket(),
 		"station_count": len(summaries),
 		"summaries":     summaries,
 	})
@@ -70,7 +74,7 @@ func (h *APIHandler) GetLatestReadings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpx.JSON(w, http.StatusOK, map[string]interface{}{
-		"hour_bucket":     timeutil.TruncateToHour(time.Now()),
+		"hour_bucket":     currentJakartaHourBucket(),
 		"station_count":   len(results),
 		"latest_readings": results,
 	})
@@ -86,7 +90,7 @@ func (h *APIHandler) GetStationReadings(w http.ResponseWriter, r *http.Request) 
 	}
 	httpx.JSON(w, http.StatusOK, map[string]interface{}{
 		"nama_lokasi":   namaLokasi,
-		"hour_bucket":   timeutil.TruncateToHour(time.Now()),
+		"hour_bucket":   currentJakartaHourBucket(),
 		"reading_count": len(readings),
 		"readings":      readings,
 	})

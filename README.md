@@ -369,7 +369,7 @@ Optional flags:
 
 ```bash
 ./bin/pda-dbinit -env-file /opt/pda-monitor/.env
-./bin/pda-dbinit -dsn 'user:pass@tcp(localhost:3306)/pda_monitor?parseTime=true&loc=Local'
+./bin/pda-dbinit -dsn 'user:pass@tcp(localhost:3306)/pda_monitor?parseTime=true&loc=Asia%2FJakarta'
 ./bin/pda-dbinit -timeout 30s
 ```
 
