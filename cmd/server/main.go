@@ -50,6 +50,9 @@ func main() {
 	if err != nil {
 		logger.Fatal(component, "Failed to connect to database", logger.F("error", err.Error()))
 	}
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(5 * time.Minute)
 	defer db.Close()
 	logger.Info(component, "Database connected successfully")
 
@@ -89,21 +92,22 @@ func main() {
 	go func() {
 		ctx := context.Background()
 
-		if count, err := telemetryService.SyncStations(ctx); err != nil {
+		records, err := telemetryService.FetchRealtime(ctx)
+		if err != nil {
+			logger.Warn(component, "Initial readings sync failed", logger.F("error", err.Error()))
+			return
+		}
+
+		if count, err := telemetryService.SyncStations(ctx, records); err != nil {
 			logger.Warn(component, "Initial station sync failed", logger.F("error", err.Error()))
 		} else {
 			logger.Info(component, "Initial station sync completed", logger.F("count", count))
 		}
 
-		records, err := telemetryService.FetchRealtime(ctx)
-		if err != nil {
-			logger.Warn(component, "Initial readings sync failed", logger.F("error", err.Error()))
+		if count, err := readingService.ProcessAndStoreReadings(ctx, records); err != nil {
+			logger.Warn(component, "Storing initial readings failed", logger.F("error", err.Error()))
 		} else {
-			if count, err := readingService.ProcessAndStoreReadings(ctx, records); err != nil {
-				logger.Warn(component, "Storing initial readings failed", logger.F("error", err.Error()))
-			} else {
-				logger.Info(component, "Initial readings sync completed", logger.F("count", count))
-			}
+			logger.Info(component, "Initial readings sync completed", logger.F("count", count))
 		}
 	}()
 

@@ -7,6 +7,7 @@ import (
 
 	"github.com/robfig/cron/v3"
 
+	"pda-monitor/internal/domain"
 	"pda-monitor/internal/logger"
 	"pda-monitor/internal/notification"
 	"pda-monitor/internal/report"
@@ -55,10 +56,6 @@ func (s *Scheduler) Start() error {
 		return fmt.Errorf("failed to schedule cleanupOldReadings: %w", err)
 	}
 
-	if _, err := s.cron.AddFunc("0 * * * *", s.syncStationMetadata); err != nil {
-		return fmt.Errorf("failed to schedule syncStationMetadata: %w", err)
-	}
-
 	for _, hour := range []int{7, 12, 17} {
 		h := hour
 		if _, err := s.cron.AddFunc(fmt.Sprintf("0 %d * * *", h), s.sendScheduledReport); err != nil {
@@ -104,6 +101,14 @@ func (s *Scheduler) syncReadings() {
 		return
 	}
 
+	if startTime.Minute() == 0 {
+		if _, err := s.telemetryService.SyncStations(ctx, records); err != nil {
+			logger.Error(component, "Failed to sync station metadata", logger.Fields(
+				"error", err.Error(),
+			))
+		}
+	}
+
 	count, err := s.readingService.ProcessAndStoreReadings(ctx, records)
 	if err != nil {
 		logger.Error(component, "Failed to store readings", logger.Fields(
@@ -146,27 +151,6 @@ func (s *Scheduler) cleanupOldReadings() {
 	}
 }
 
-func (s *Scheduler) syncStationMetadata() {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	startTime := time.Now()
-
-	count, err := s.telemetryService.SyncStations(ctx)
-	if err != nil {
-		logger.Error(component, "Failed to sync station metadata", logger.Fields(
-			"error", err.Error(),
-			"duration_ms", time.Since(startTime).Milliseconds(),
-		))
-		return
-	}
-
-	logger.Info(component, "Station metadata synced", logger.Fields(
-		"count", count,
-		"duration_ms", time.Since(startTime).Milliseconds(),
-	))
-}
-
 func (s *Scheduler) sendScheduledReport() {
 	if s.telegram == nil {
 		logger.Warn(component, "Telegram not configured, skipping scheduled report")
@@ -179,9 +163,9 @@ func (s *Scheduler) sendScheduledReport() {
 	startTime := time.Now()
 	now := timeutil.NowJakarta()
 
-	records, err := s.telemetryService.FetchRealtime(ctx)
+	readings, err := s.readingService.GetLatestReadings(ctx)
 	if err != nil {
-		logger.Error(component, "Failed to fetch data for scheduled report", logger.Fields(
+		logger.Error(component, "Failed to fetch latest readings for scheduled report", logger.Fields(
 			"error", err.Error(),
 			"scheduled_time", now.Format("15:04"),
 			"duration_ms", time.Since(startTime).Milliseconds(),
@@ -189,14 +173,20 @@ func (s *Scheduler) sendScheduledReport() {
 		return
 	}
 
-	results, err := s.calculator.CalculateBatch(ctx, records)
-	if err != nil {
-		logger.Error(component, "Failed to calculate debit for scheduled report", logger.Fields(
-			"error", err.Error(),
-			"records", len(records),
-			"duration_ms", time.Since(startTime).Milliseconds(),
-		))
-		return
+	results := make([]domain.DebitResult, 0, len(readings))
+	for _, r := range readings {
+		debit := float64(0)
+		if r.Debit != nil {
+			debit = *r.Debit
+		}
+		results = append(results, domain.DebitResult{
+			NamaLokasi: r.NamaLokasi,
+			WLevel:     r.WLevel,
+			TMA:        r.TMA,
+			Debit:      debit,
+			IsValid:    r.IsValid,
+			RecordedAt: r.RecordedAt,
+		})
 	}
 
 	if err := s.telegram.SendDebitReport(ctx, results); err != nil {

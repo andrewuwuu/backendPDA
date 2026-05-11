@@ -31,7 +31,12 @@ func (h *APIHandler) GetStation(w http.ResponseWriter, r *http.Request) {
 
 func (h *APIHandler) SyncStations(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	count, err := h.telemetryService.SyncStations(ctx)
+	records, err := h.telemetryService.FetchRealtime(ctx)
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	count, err := h.telemetryService.SyncStations(ctx, records)
 	if err != nil {
 		httpx.Error(w, http.StatusInternalServerError, err.Error())
 		return

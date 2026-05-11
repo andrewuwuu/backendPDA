@@ -120,7 +120,8 @@ func (r *ReadingRepo) GetHourlySummary(ctx context.Context) ([]domain.HourlySumm
 
 func (r *ReadingRepo) GetLatestReadingPerStation(ctx context.Context) ([]domain.HourlyReading, error) {
 	var readings []domain.HourlyReading
-	hourBucket := timeutil.TruncateToJakartaHour(time.Now())
+	// Look back 2 hours to find the latest available reading for each station
+	cutoff := time.Now().Add(-2 * time.Hour)
 
 	query := `
         SELECT
@@ -137,14 +138,13 @@ func (r *ReadingRepo) GetLatestReadingPerStation(ctx context.Context) ([]domain.
         INNER JOIN (
             SELECT nama_lokasi, MAX(recorded_at) as max_time
             FROM hourly_readings
-            WHERE hour_bucket = ?
+            WHERE recorded_at >= ?
             GROUP BY nama_lokasi
         ) latest ON hr.nama_lokasi = latest.nama_lokasi
                AND hr.recorded_at = latest.max_time
-        WHERE hr.hour_bucket = ?
         ORDER BY hr.nama_lokasi`
 
-	err := r.db.SelectContext(ctx, &readings, query, hourBucket, hourBucket)
+	err := r.db.SelectContext(ctx, &readings, query, cutoff)
 	return readings, err
 }
 
@@ -186,50 +186,47 @@ func (r *ReadingRepo) GetDebitAtHours(ctx context.Context, date time.Time, hours
 		return nil, nil
 	}
 
-	loc := timeutil.JakartaLocation()
-	startTime := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
-	endTime := startTime.Add(24 * time.Hour)
+	var snapshots []domain.HourlyDebitSnapshot
 
-	query, args, err := sqlx.In(`
-        SELECT
-            hr.nama_lokasi,
-            latest.target_hour as hour,
-            hr.debit,
-            hr.tma
-        FROM hourly_readings hr
-        INNER JOIN (
-            SELECT nama_lokasi, HOUR(recorded_at) as target_hour, MAX(recorded_at) as max_recorded_at
-            FROM hourly_readings
-            WHERE recorded_at >= ?
-              AND recorded_at < ?
-              AND HOUR(recorded_at) IN (?)
-              AND is_valid = TRUE
-              AND debit IS NOT NULL
-            GROUP BY nama_lokasi, HOUR(recorded_at)
-        ) latest ON hr.nama_lokasi = latest.nama_lokasi
-               AND HOUR(hr.recorded_at) = latest.target_hour
-               AND hr.recorded_at = latest.max_recorded_at
-        ORDER BY hr.nama_lokasi, latest.target_hour`, startTime, endTime, hours)
-	if err != nil {
-		return nil, err
-	}
+	for _, hour := range hours {
+		// Target time: H:05:00 (allow 5 minutes margin for late-arriving data)
+		targetTime := time.Date(date.Year(), date.Month(), date.Day(), hour, 5, 0, 0, timeutil.JakartaLocation())
+		// Start time: 2 hours before target to catch readings that haven't updated in the exact target hour
+		startTime := targetTime.Add(-2 * time.Hour)
 
-	query = r.db.Rebind(query)
+		query := `
+            SELECT
+                hr.nama_lokasi,
+                ? as hour,
+                hr.debit,
+                hr.tma
+            FROM hourly_readings hr
+            INNER JOIN (
+                SELECT nama_lokasi, MAX(recorded_at) as max_recorded_at
+                FROM hourly_readings
+                WHERE recorded_at >= ?
+                  AND recorded_at <= ?
+                  AND is_valid = TRUE
+                  AND debit IS NOT NULL
+                GROUP BY nama_lokasi
+            ) latest ON hr.nama_lokasi = latest.nama_lokasi
+                   AND hr.recorded_at = latest.max_recorded_at
+            ORDER BY hr.nama_lokasi`
 
-	var rows []domain.HourlyDebitSnapshotRow
-	err = r.db.SelectContext(ctx, &rows, query, args...)
-	if err != nil {
-		return nil, err
-	}
+		var rows []domain.HourlyDebitSnapshotRow
+		err := r.db.SelectContext(ctx, &rows, query, hour, startTime, targetTime)
+		if err != nil {
+			return nil, err
+		}
 
-	snapshots := make([]domain.HourlyDebitSnapshot, 0, len(rows))
-	for _, row := range rows {
-		snapshots = append(snapshots, domain.HourlyDebitSnapshot{
-			NamaLokasi: row.NamaLokasi,
-			Hour:       row.Hour,
-			Debit:      row.Debit,
-			TMA:        row.TMA,
-		})
+		for _, row := range rows {
+			snapshots = append(snapshots, domain.HourlyDebitSnapshot{
+				NamaLokasi: row.NamaLokasi,
+				Hour:       row.Hour,
+				Debit:      row.Debit,
+				TMA:        row.TMA,
+			})
+		}
 	}
 
 	return snapshots, nil

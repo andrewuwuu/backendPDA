@@ -3,7 +3,6 @@ package service
 import (
     "context"
     "fmt"
-    "io"
     "net/http"
     "net/url"
     "time"
@@ -65,12 +64,7 @@ func (s *TelemetryService) FetchRealtime(ctx context.Context) ([]domain.PDARecor
         return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
     }
 
-    body, err := io.ReadAll(resp.Body)
-    if err != nil {
-        return nil, fmt.Errorf("failed to read response body: %w", err)
-    }
-
-    return s.parser.ParseRealtime(body)
+    return s.parser.ParseRealtime(resp.Body)
 }
 
 func (s *TelemetryService) FetchHistorical(ctx context.Context, namaLokasi string, from, to time.Time) ([]domain.PDARecord, error) {
@@ -99,19 +93,10 @@ func (s *TelemetryService) FetchHistorical(ctx context.Context, namaLokasi strin
         return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
     }
 
-    body, err := io.ReadAll(resp.Body)
-    if err != nil {
-        return nil, fmt.Errorf("failed to read response body: %w", err)
-    }
-
-    return s.parser.ParseHistorical(body, namaLokasi)
+    return s.parser.ParseHistorical(resp.Body, namaLokasi)
 }
 
-func (s *TelemetryService) SyncStations(ctx context.Context) (int, error) {
-    records, err := s.FetchRealtime(ctx)
-    if err != nil {
-        return 0, err
-    }
+func (s *TelemetryService) SyncStations(ctx context.Context, records []domain.PDARecord) (int, error) {
 
     stations := make([]domain.Station, 0, len(records))
     now := time.Now()

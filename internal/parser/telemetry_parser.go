@@ -3,6 +3,7 @@ package parser
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"strconv"
 	"time"
 
@@ -49,14 +50,10 @@ func NewTelemetryParser() *TelemetryParser {
 	return &TelemetryParser{}
 }
 
-func (p *TelemetryParser) ParseRealtime(data []byte) ([]domain.PDARecord, error) {
+func (p *TelemetryParser) ParseRealtime(r io.Reader) ([]domain.PDARecord, error) {
 	var response RealtimeResponse
-	if err := json.Unmarshal(data, &response); err != nil {
-		preview := string(data)
-		if len(preview) > 200 {
-			preview = preview[:200]
-		}
-		return nil, fmt.Errorf("failed to unmarshal realtime data: %w\nResponse preview: %s", err, preview)
+	if err := json.NewDecoder(r).Decode(&response); err != nil {
+		return nil, fmt.Errorf("failed to decode realtime data: %w", err)
 	}
 
 	return p.processRealtimeItems(response.TelemetryJakarta)
@@ -80,14 +77,10 @@ func (p *TelemetryParser) processRealtimeItems(items []RealtimeTelemetryItem) ([
 	return records, nil
 }
 
-func (p *TelemetryParser) ParseHistorical(data []byte, namaLokasi string) ([]domain.PDARecord, error) {
+func (p *TelemetryParser) ParseHistorical(r io.Reader, namaLokasi string) ([]domain.PDARecord, error) {
 	var response HistoricalResponse
-	if err := json.Unmarshal(data, &response); err != nil {
-		preview := string(data)
-		if len(preview) > 200 {
-			preview = preview[:200]
-		}
-		return nil, fmt.Errorf("failed to unmarshal historical data: %w\nResponse preview: %s", err, preview)
+	if err := json.NewDecoder(r).Decode(&response); err != nil {
+		return nil, fmt.Errorf("failed to decode historical data: %w", err)
 	}
 
 	var records []domain.PDARecord
