@@ -7,7 +7,6 @@ import (
 
 	"github.com/robfig/cron/v3"
 
-	"pda-monitor/internal/domain"
 	"pda-monitor/internal/logger"
 	"pda-monitor/internal/notification"
 	"pda-monitor/internal/report"
@@ -163,7 +162,7 @@ func (s *Scheduler) sendScheduledReport() {
 	startTime := time.Now()
 	now := timeutil.NowJakarta()
 
-	readings, err := s.readingService.GetLatestReadings(ctx)
+	results, err := s.reportService.BuildScheduledReport(ctx)
 	if err != nil {
 		logger.Error(component, "Failed to fetch latest readings for scheduled report", logger.Fields(
 			"error", err.Error(),
@@ -171,22 +170,6 @@ func (s *Scheduler) sendScheduledReport() {
 			"duration_ms", time.Since(startTime).Milliseconds(),
 		))
 		return
-	}
-
-	results := make([]domain.DebitResult, 0, len(readings))
-	for _, r := range readings {
-		debit := float64(0)
-		if r.Debit != nil {
-			debit = *r.Debit
-		}
-		results = append(results, domain.DebitResult{
-			NamaLokasi: r.NamaLokasi,
-			WLevel:     r.WLevel,
-			TMA:        r.TMA,
-			Debit:      debit,
-			IsValid:    r.IsValid,
-			RecordedAt: r.RecordedAt,
-		})
 	}
 
 	if err := s.telegram.SendDebitReport(ctx, results); err != nil {

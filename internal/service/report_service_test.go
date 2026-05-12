@@ -28,19 +28,34 @@ func TestAssembleDailyReports_Combined(t *testing.T) {
 
 	reports := assembleDailyReports(stationMap, tmaSummary, debitSnapshots)
 
-	if len(reports) != 1 {
-		t.Fatalf("expected 1 report, got %d", len(reports))
+	if len(reports) != 2 {
+		t.Fatalf("expected 2 reports, got %d", len(reports))
 	}
 
-	r := reports[0]
-	if r.NamaLokasi != "station_a" {
-		t.Errorf("expected NamaLokasi='station_a', got %q", r.NamaLokasi)
+	var rA, rB domain.DailyStationReport
+	for _, r := range reports {
+		if r.NamaLokasi == "station_a" {
+			rA = r
+		} else if r.NamaLokasi == "station_b" {
+			rB = r
+		}
 	}
-	if r.Debit07 == nil || *r.Debit07 != 1.5 {
-		t.Errorf("expected Debit07=1.5, got %v", r.Debit07)
+
+	if rA.NamaLokasi != "station_a" {
+		t.Errorf("expected NamaLokasi='station_a', got %q", rA.NamaLokasi)
 	}
-	if r.MinTMA == nil || *r.MinTMA != 0.5 {
-		t.Errorf("expected MinTMA=0.5, got %v", r.MinTMA)
+	if rA.Debit07 == nil || *rA.Debit07 != 1.5 {
+		t.Errorf("expected Debit07=1.5, got %v", rA.Debit07)
+	}
+	if rA.MinTMA == nil || *rA.MinTMA != 0.5 {
+		t.Errorf("expected MinTMA=0.5, got %v", rA.MinTMA)
+	}
+
+	if rB.NamaLokasi != "station_b" {
+		t.Errorf("expected NamaLokasi='station_b', got %q", rB.NamaLokasi)
+	}
+	if rB.Debit07 != nil {
+		t.Errorf("expected nil Debit07 for station_b, got %v", rB.Debit07)
 	}
 }
 
@@ -130,7 +145,7 @@ func TestAssembleDailyReports_MergesStationsFromBothSources(t *testing.T) {
 	reports := assembleDailyReports(stationMap, tmaSummary, debitSnapshots)
 
 	if len(reports) != 2 {
-		t.Fatalf("expected 2 reports (one from TMA, one from debit), got %d", len(reports))
+		t.Fatalf("expected 2 reports, got %d", len(reports))
 	}
 
 	seen := map[string]bool{}

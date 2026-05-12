@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"pda-monitor/internal/domain"
@@ -64,32 +65,56 @@ func assembleDailyReports(
 	tmaSummary map[string]domain.TMARangeSummary,
 	debitSnapshots map[string]map[int]*float64,
 ) []domain.DailyStationReport {
+	// Normalize map keys to handle case-sensitivity differences between telemetry API and DB
+	normTMA := make(map[string]domain.TMARangeSummary)
+	for k, v := range tmaSummary {
+		normTMA[strings.ToLower(k)] = v
+	}
+	normDebit := make(map[string]map[int]*float64)
+	for k, v := range debitSnapshots {
+		normDebit[strings.ToLower(k)] = v
+	}
+
 	stationNames := make(map[string]bool)
-	for name := range tmaSummary {
+	for name := range stationMap {
+		stationNames[strings.ToLower(name)] = true
+	}
+	for name := range normTMA {
 		stationNames[name] = true
 	}
-	for name := range debitSnapshots {
+	for name := range normDebit {
 		stationNames[name] = true
 	}
 
 	reports := make([]domain.DailyStationReport, 0, len(stationNames))
-	for namaLokasi := range stationNames {
-		namaAlat := stationMap[namaLokasi]
+	for normLokasi := range stationNames {
+		// Try to find the original casing from stationMap, or fallback to the normalized one
+		var originalLokasi, namaAlat string
+		for k, v := range stationMap {
+			if strings.ToLower(k) == normLokasi {
+				originalLokasi = k
+				namaAlat = v
+				break
+			}
+		}
+		if originalLokasi == "" {
+			originalLokasi = normLokasi
+		}
 		if namaAlat == "" {
-			namaAlat = namaLokasi
+			namaAlat = originalLokasi
 		}
 
 		report := domain.DailyStationReport{
-			NamaLokasi: namaLokasi,
-			NamaAlat:   util.CleanStationName(namaLokasi, namaAlat),
+			NamaLokasi: originalLokasi,
+			NamaAlat:   util.CleanStationName(originalLokasi, namaAlat),
 		}
 
-		if tma, ok := tmaSummary[namaLokasi]; ok {
+		if tma, ok := normTMA[normLokasi]; ok {
 			report.MinTMA = tma.MinTMA
 			report.MaxTMA = tma.MaxTMA
 		}
 
-		if debits, ok := debitSnapshots[namaLokasi]; ok {
+		if debits, ok := normDebit[normLokasi]; ok {
 			report.Debit07 = debits[7]
 			report.Debit12 = debits[12]
 			report.Debit17 = debits[17]
@@ -99,4 +124,58 @@ func assembleDailyReports(
 	}
 
 	return reports
+}
+
+// BuildScheduledReport assembles the latest debit results for all stations
+func (s *ReportService) BuildScheduledReport(ctx context.Context) ([]domain.DebitResult, error) {
+	stations, err := s.stationRepo.GetAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	readings, err := s.readingService.GetLatestReadings(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	readingMap := make(map[string]domain.HourlyReading)
+	for _, r := range readings {
+		readingMap[strings.ToLower(r.NamaLokasi)] = r
+	}
+
+	results := make([]domain.DebitResult, 0, len(stations))
+	for _, st := range stations {
+		debit := float64(0)
+		isValid := false
+		wLevel := float64(0)
+		tma := float64(0)
+		var recordedAt time.Time
+
+		if r, ok := readingMap[strings.ToLower(st.NamaLokasi)]; ok {
+			if r.Debit != nil {
+				debit = *r.Debit
+			}
+			isValid = r.IsValid
+			wLevel = r.WLevel
+			tma = r.TMA
+			recordedAt = r.RecordedAt
+		}
+
+		results = append(results, domain.DebitResult{
+			NamaLokasi:   st.NamaLokasi,
+			NamaAlat:     st.NamaAlat,
+			WLevel:       wLevel,
+			TMA:          tma,
+			Debit:        debit,
+			IsValid:      isValid,
+			Status:       st.Status,
+			Sungai:       st.Sungai,
+			Lat:          st.Lat,
+			Lng:          st.Lng,
+			RecordedAt:   recordedAt,
+			CalculatedAt: time.Now(),
+		})
+	}
+
+	return results, nil
 }

@@ -27,7 +27,6 @@ func NewDebitCalculator(repo repository.FormulaRepository) *DebitCalculator {
 
 func (dc *DebitCalculator) Calculate(ctx context.Context, record domain.PDARecord) (*domain.DebitResult, error) {
 	result := &domain.DebitResult{
-		NamaLokasi:   record.NamaLokasi,
 		NamaAlat:     record.NamaAlat,
 		WLevel:       record.WLevel,
 		TMA:          record.TMA,
