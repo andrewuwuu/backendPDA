@@ -3,6 +3,8 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"runtime"
+	"strings"
 	"time"
 
 	"github.com/robfig/cron/v3"
@@ -57,7 +59,7 @@ func (s *Scheduler) Start() error {
 
 	for _, hour := range []int{7, 12, 17} {
 		h := hour
-		if _, err := s.cron.AddFunc(fmt.Sprintf("0 %d * * *", h), s.sendScheduledReport); err != nil {
+		if _, err := s.cron.AddFunc(fmt.Sprintf("6 %d * * *", h), s.sendScheduledReport); err != nil {
 			return fmt.Errorf("failed to schedule sendScheduledReport for hour %d: %w", h, err)
 		}
 	}
@@ -72,7 +74,7 @@ func (s *Scheduler) Start() error {
 		"readings_sync", "every 5 minutes",
 		"cleanup", "daily at 00:30 WIB (keeps 7 days)",
 		"station_sync", "every hour at :00",
-		"telegram_text", "07:00, 12:00, 17:00 WIB",
+		"telegram_text", "07:06, 12:06, 17:06 WIB",
 		"daily_excel", "17:10 WIB",
 	))
 
@@ -122,6 +124,8 @@ func (s *Scheduler) syncReadings() {
 		"count", count,
 		"duration_ms", time.Since(startTime).Milliseconds(),
 	))
+
+	logMemoryStats("syncReadings")
 }
 
 func (s *Scheduler) cleanupOldReadings() {
@@ -182,9 +186,12 @@ func (s *Scheduler) sendScheduledReport() {
 	}
 
 	validCount := 0
+	var missingNames []string
 	for _, r := range results {
 		if r.IsValid {
 			validCount++
+		} else {
+			missingNames = append(missingNames, r.NamaLokasi)
 		}
 	}
 
@@ -192,8 +199,11 @@ func (s *Scheduler) sendScheduledReport() {
 		"scheduled_time", now.Format("15:04 WIB"),
 		"total_stations", len(results),
 		"valid_debit", validCount,
+		"missing_stations", strings.Join(missingNames, ", "),
 		"duration_ms", time.Since(startTime).Milliseconds(),
 	))
+
+	logMemoryStats("sendScheduledReport")
 }
 
 func (s *Scheduler) sendDailyExcelReport() {
@@ -246,10 +256,32 @@ func (s *Scheduler) sendDailyExcelReport() {
 		return
 	}
 
+	validDebitCount := 0
+	for _, r := range reports {
+		if r.Debit07 != nil || r.Debit12 != nil || r.Debit17 != nil {
+			validDebitCount++
+		}
+	}
+
 	logger.Info(component, "Daily Excel report sent successfully", logger.Fields(
 		"date", now.Format("2006-01-02"),
 		"stations", len(reports),
+		"valid_debit_stations", validDebitCount,
 		"filename", filename,
 		"duration_ms", time.Since(startTime).Milliseconds(),
+	))
+
+	logMemoryStats("sendDailyExcelReport")
+}
+
+func logMemoryStats(after string) {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	logger.Debug(component, "Memory stats", logger.Fields(
+		"after", after,
+		"alloc_mb", float64(m.Alloc)/(1024*1024),
+		"heap_inuse_mb", float64(m.HeapInuse)/(1024*1024),
+		"heap_objects", m.HeapObjects,
+		"num_gc", m.NumGC,
 	))
 }

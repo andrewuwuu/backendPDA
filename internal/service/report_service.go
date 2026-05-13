@@ -65,19 +65,19 @@ func assembleDailyReports(
 	tmaSummary map[string]domain.TMARangeSummary,
 	debitSnapshots map[string]map[int]*float64,
 ) []domain.DailyStationReport {
-	// Normalize map keys to handle case-sensitivity differences between telemetry API and DB
+	// Normalize map keys to handle case/spacing differences between telemetry API and DB
 	normTMA := make(map[string]domain.TMARangeSummary)
 	for k, v := range tmaSummary {
-		normTMA[strings.ToLower(k)] = v
+		normTMA[strings.TrimSpace(strings.ToLower(k))] = v
 	}
 	normDebit := make(map[string]map[int]*float64)
 	for k, v := range debitSnapshots {
-		normDebit[strings.ToLower(k)] = v
+		normDebit[strings.TrimSpace(strings.ToLower(k))] = v
 	}
 
 	stationNames := make(map[string]bool)
 	for name := range stationMap {
-		stationNames[strings.ToLower(name)] = true
+		stationNames[strings.TrimSpace(strings.ToLower(name))] = true
 	}
 	for name := range normTMA {
 		stationNames[name] = true
@@ -91,7 +91,7 @@ func assembleDailyReports(
 		// Try to find the original casing from stationMap, or fallback to the normalized one
 		var originalLokasi, namaAlat string
 		for k, v := range stationMap {
-			if strings.ToLower(k) == normLokasi {
+			if strings.TrimSpace(strings.ToLower(k)) == normLokasi {
 				originalLokasi = k
 				namaAlat = v
 				break
@@ -126,7 +126,9 @@ func assembleDailyReports(
 	return reports
 }
 
-// BuildScheduledReport assembles the latest debit results for all stations
+// BuildScheduledReport assembles the latest debit results for all stations.
+// It unions stations from metadata and recent readings so that active stations
+// are never dropped even if a station-metadata sync was missed.
 func (s *ReportService) BuildScheduledReport(ctx context.Context) ([]domain.DebitResult, error) {
 	stations, err := s.stationRepo.GetAll(ctx)
 	if err != nil {
@@ -140,18 +142,25 @@ func (s *ReportService) BuildScheduledReport(ctx context.Context) ([]domain.Debi
 
 	readingMap := make(map[string]domain.HourlyReading)
 	for _, r := range readings {
-		readingMap[strings.ToLower(r.NamaLokasi)] = r
+		readingMap[strings.TrimSpace(strings.ToLower(r.NamaLokasi))] = r
 	}
 
-	results := make([]domain.DebitResult, 0, len(stations))
+	// Track which normalized station names are already included
+	seen := make(map[string]bool, len(stations))
+
+	results := make([]domain.DebitResult, 0, len(stations)+len(readingMap))
+	// First pass: all stations from metadata
 	for _, st := range stations {
+		key := strings.TrimSpace(strings.ToLower(st.NamaLokasi))
+		seen[key] = true
+
 		debit := float64(0)
 		isValid := false
 		wLevel := float64(0)
 		tma := float64(0)
 		var recordedAt time.Time
 
-		if r, ok := readingMap[strings.ToLower(st.NamaLokasi)]; ok {
+		if r, ok := readingMap[key]; ok {
 			if r.Debit != nil {
 				debit = *r.Debit
 			}
@@ -173,6 +182,29 @@ func (s *ReportService) BuildScheduledReport(ctx context.Context) ([]domain.Debi
 			Lat:          st.Lat,
 			Lng:          st.Lng,
 			RecordedAt:   recordedAt,
+			CalculatedAt: time.Now(),
+		})
+	}
+
+	// Second pass: readings-only stations not in metadata
+	for key, r := range readingMap {
+		if seen[key] {
+			continue
+		}
+
+		debit := float64(0)
+		if r.Debit != nil {
+			debit = *r.Debit
+		}
+
+		results = append(results, domain.DebitResult{
+			NamaLokasi:   r.NamaLokasi,
+			NamaAlat:     r.NamaLokasi,
+			WLevel:       r.WLevel,
+			TMA:          r.TMA,
+			Debit:        debit,
+			IsValid:      r.IsValid,
+			RecordedAt:   r.RecordedAt,
 			CalculatedAt: time.Now(),
 		})
 	}

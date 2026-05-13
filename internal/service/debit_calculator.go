@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +24,11 @@ func NewDebitCalculator(repo repository.FormulaRepository) *DebitCalculator {
 		formulaRepo: repo,
 		cache:       make(map[string][]domain.FormulaParams),
 	}
+}
+
+// normalizeKey produces a canonical cache key from a station name.
+func normalizeKey(namaLokasi string) string {
+	return strings.TrimSpace(strings.ToLower(namaLokasi))
 }
 
 func (dc *DebitCalculator) Calculate(ctx context.Context, record domain.PDARecord) (*domain.DebitResult, error) {
@@ -118,8 +124,10 @@ func (dc *DebitCalculator) CalculateBatch(ctx context.Context, records []domain.
 }
 
 func (dc *DebitCalculator) getParams(ctx context.Context, namaLokasi string) ([]domain.FormulaParams, error) {
+	key := normalizeKey(namaLokasi)
+
 	dc.mu.RLock()
-	if formulas, ok := dc.cache[namaLokasi]; ok {
+	if formulas, ok := dc.cache[key]; ok {
 		dc.mu.RUnlock()
 		return formulas, nil
 	}
@@ -133,7 +141,7 @@ func (dc *DebitCalculator) getParams(ctx context.Context, namaLokasi string) ([]
 	sortFormulas(formulas)
 
 	dc.mu.Lock()
-	dc.cache[namaLokasi] = formulas
+	dc.cache[key] = formulas
 	dc.mu.Unlock()
 
 	if len(formulas) == 0 {
@@ -157,9 +165,10 @@ func (dc *DebitCalculator) RefreshCache(ctx context.Context) error {
 }
 
 func (dc *DebitCalculator) InvalidateCache(namaLokasi string) {
+	key := normalizeKey(namaLokasi)
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
-	delete(dc.cache, namaLokasi)
+	delete(dc.cache, key)
 }
 
 func (dc *DebitCalculator) GetFormulasForStation(ctx context.Context, namaLokasi string) ([]domain.FormulaParams, error) {
@@ -175,8 +184,9 @@ func (dc *DebitCalculator) preloadMissingStations(ctx context.Context, records [
 
 	dc.mu.RLock()
 	for _, record := range records {
-		if _, ok := dc.cache[record.NamaLokasi]; !ok {
-			missing[record.NamaLokasi] = struct{}{}
+		key := normalizeKey(record.NamaLokasi)
+		if _, ok := dc.cache[key]; !ok {
+			missing[key] = struct{}{}
 		}
 	}
 	dc.mu.RUnlock()
@@ -190,15 +200,15 @@ func (dc *DebitCalculator) preloadMissingStations(ctx context.Context, records [
 		return err
 	}
 
-	for namaLokasi := range missing {
-		if _, ok := cache[namaLokasi]; !ok {
-			cache[namaLokasi] = []domain.FormulaParams{}
+	for key := range missing {
+		if _, ok := cache[key]; !ok {
+			cache[key] = []domain.FormulaParams{}
 		}
 	}
 
 	dc.mu.Lock()
-	for namaLokasi, formulas := range cache {
-		dc.cache[namaLokasi] = formulas
+	for key, formulas := range cache {
+		dc.cache[key] = formulas
 	}
 	dc.mu.Unlock()
 
@@ -213,11 +223,12 @@ func (dc *DebitCalculator) loadAllParams(ctx context.Context) (map[string][]doma
 
 	cache := make(map[string][]domain.FormulaParams)
 	for _, p := range params {
-		cache[p.NamaLokasi] = append(cache[p.NamaLokasi], p)
+		key := normalizeKey(p.NamaLokasi)
+		cache[key] = append(cache[key], p)
 	}
 
-	for namaLokasi := range cache {
-		sortFormulas(cache[namaLokasi])
+	for key := range cache {
+		sortFormulas(cache[key])
 	}
 
 	return cache, nil

@@ -2,6 +2,7 @@ package mysql
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -186,51 +187,57 @@ func (r *ReadingRepo) GetDebitAtHours(ctx context.Context, date time.Time, hours
 		return nil, nil
 	}
 
-	var snapshots []domain.HourlyDebitSnapshot
+	loc := timeutil.JakartaLocation()
+	// Day start: 00:00:00 on the target date in Jakarta time
+	dayStart := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, loc)
+
+	// Build a single UNION ALL query: one subquery per target hour.
+	// Each subquery finds the latest valid debit reading per station
+	// between dayStart and hour:05:00.
+	var queryParts []string
+	var args []interface{}
 
 	for _, hour := range hours {
-		// Target time: H:05:00 (allow 5 minutes margin for late-arriving data)
-		targetTime := time.Date(date.Year(), date.Month(), date.Day(), hour, 5, 0, 0, timeutil.JakartaLocation())
-		// Start time: 2 hours before target to catch readings that haven't updated in the exact target hour
-		startTime := targetTime.Add(-2 * time.Hour)
+		cutoff := time.Date(date.Year(), date.Month(), date.Day(), hour, 5, 0, 0, loc)
 
-		query := `
-            SELECT
-                hr.nama_lokasi,
-                ? as hour,
-                hr.debit,
-                hr.tma
-            FROM hourly_readings hr
-            INNER JOIN (
-                SELECT nama_lokasi, MAX(recorded_at) as max_recorded_at
-                FROM hourly_readings
-                WHERE recorded_at >= ?
-                  AND recorded_at <= ?
-                  AND is_valid = TRUE
-                  AND debit IS NOT NULL
-                GROUP BY nama_lokasi
-            ) latest ON hr.nama_lokasi = latest.nama_lokasi
-                   AND hr.recorded_at = latest.max_recorded_at
-            ORDER BY hr.nama_lokasi`
+		part := `
+		SELECT sub.nama_lokasi, ? AS hour, sub.debit, sub.tma
+		FROM hourly_readings sub
+		INNER JOIN (
+			SELECT nama_lokasi, MAX(recorded_at) AS max_recorded_at
+			FROM hourly_readings
+			WHERE recorded_at >= ?
+			  AND recorded_at <= ?
+			  AND is_valid = TRUE
+			  AND debit IS NOT NULL
+			GROUP BY nama_lokasi
+		) latest ON sub.nama_lokasi = latest.nama_lokasi
+		       AND sub.recorded_at = latest.max_recorded_at`
 
-		var rows []domain.HourlyDebitSnapshotRow
-		err := r.db.SelectContext(ctx, &rows, query, hour, startTime, targetTime)
-		if err != nil {
-			return nil, err
-		}
+		queryParts = append(queryParts, part)
+		args = append(args, hour, dayStart, cutoff)
+	}
 
-		for _, row := range rows {
-			snapshots = append(snapshots, domain.HourlyDebitSnapshot{
-				NamaLokasi: row.NamaLokasi,
-				Hour:       row.Hour,
-				Debit:      row.Debit,
-				TMA:        row.TMA,
-			})
+	fullQuery := strings.Join(queryParts, "\nUNION ALL\n") + "\nORDER BY nama_lokasi, hour"
+
+	var rows []domain.HourlyDebitSnapshotRow
+	if err := r.db.SelectContext(ctx, &rows, fullQuery, args...); err != nil {
+		return nil, err
+	}
+
+	snapshots := make([]domain.HourlyDebitSnapshot, len(rows))
+	for i, row := range rows {
+		snapshots[i] = domain.HourlyDebitSnapshot{
+			NamaLokasi: row.NamaLokasi,
+			Hour:       row.Hour,
+			Debit:      row.Debit,
+			TMA:        row.TMA,
 		}
 	}
 
 	return snapshots, nil
 }
+
 
 func (r *ReadingRepo) GetReadingsByTimeRange(ctx context.Context, namaLokasi string, from, to time.Time) ([]domain.HourlyReading, error) {
 	var readings []domain.HourlyReading

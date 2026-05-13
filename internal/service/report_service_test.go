@@ -156,3 +156,83 @@ func TestAssembleDailyReports_MergesStationsFromBothSources(t *testing.T) {
 		t.Errorf("expected both station_a and station_b, got %v", seen)
 	}
 }
+
+func TestAssembleDailyReports_ReadingOnlyStations(t *testing.T) {
+	// Stations only from readings (no metadata)
+	stationMap := map[string]string{}
+
+	d07 := 1.0
+	d12 := 2.0
+	debitSnapshots := map[string]map[int]*float64{
+		"reading_only_station": {7: &d07, 12: &d12},
+	}
+
+	reports := assembleDailyReports(stationMap, nil, debitSnapshots)
+
+	if len(reports) != 1 {
+		t.Fatalf("expected 1 report for reading-only station, got %d", len(reports))
+	}
+	if reports[0].Debit07 == nil || *reports[0].Debit07 != 1.0 {
+		t.Errorf("expected Debit07=1.0, got %v", reports[0].Debit07)
+	}
+	if reports[0].Debit17 != nil {
+		t.Errorf("expected nil Debit17 for partial reading-only station, got %v", reports[0].Debit17)
+	}
+}
+
+func TestAssembleDailyReports_MixedCaseStationsMerged(t *testing.T) {
+	stationMap := map[string]string{
+		"Station_A": "PDA A Alat",
+	}
+
+	minTMA := 0.5
+	tmaSummary := map[string]domain.TMARangeSummary{
+		"station_a": {NamaLokasi: "station_a", MinTMA: &minTMA},
+	}
+
+	d07 := 3.0
+	debitSnapshots := map[string]map[int]*float64{
+		"STATION_A": {7: &d07},
+	}
+
+	reports := assembleDailyReports(stationMap, tmaSummary, debitSnapshots)
+
+	if len(reports) != 1 {
+		t.Fatalf("expected 1 report (mixed-case merged), got %d", len(reports))
+	}
+
+	r := reports[0]
+	if r.MinTMA == nil || *r.MinTMA != 0.5 {
+		t.Errorf("expected MinTMA=0.5 from TMA source, got %v", r.MinTMA)
+	}
+	if r.Debit07 == nil || *r.Debit07 != 3.0 {
+		t.Errorf("expected Debit07=3.0 from debit source, got %v", r.Debit07)
+	}
+}
+
+func TestAssembleDailyReports_MissingDebitNilNotOmitted(t *testing.T) {
+	stationMap := map[string]string{
+		"station_a": "PDA A",
+		"station_b": "PDA B",
+	}
+
+	d07 := 1.5
+	debitSnapshots := map[string]map[int]*float64{
+		"station_a": {7: &d07, 12: nil, 17: nil},
+	}
+
+	reports := assembleDailyReports(stationMap, nil, debitSnapshots)
+
+	if len(reports) != 2 {
+		t.Fatalf("expected 2 reports (all stations present), got %d", len(reports))
+	}
+
+	for _, r := range reports {
+		if r.NamaLokasi == "station_b" {
+			if r.Debit07 != nil || r.Debit12 != nil || r.Debit17 != nil {
+				t.Error("station_b should have nil debits, not be omitted")
+			}
+		}
+	}
+}
+

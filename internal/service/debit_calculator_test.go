@@ -205,3 +205,140 @@ func TestDebitCalculatorCalculateBatchPreloadsMissingStationsOnce(t *testing.T) 
 		}
 	}
 }
+
+func TestDebitCalculatorCacheLookupIsCaseInsensitive(t *testing.T) {
+	repo := &fakeFormulaRepo{formulas: map[string][]domain.FormulaParams{
+		"PDA-Test": {
+			{
+				NamaLokasi:      "PDA-Test",
+				C:               10,
+				H0:              0,
+				B:               1,
+				TMAMin:          0,
+				TMAMinInclusive: true,
+				TMAMax:          10,
+				TMAMaxInclusive: true,
+				Priority:        1,
+			},
+		},
+	}}
+
+	calc := NewDebitCalculator(repo)
+
+	// First call with uppercase
+	res1, err := calc.Calculate(context.Background(), domain.PDARecord{
+		NamaLokasi: "PDA-Test",
+		TMA:        2,
+		RecordedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Calculate returned error: %v", err)
+	}
+	if !res1.IsValid {
+		t.Fatal("expected valid result for PDA-Test")
+	}
+
+	// Second call with lowercase — should hit cached normalized key
+	res2, err := calc.Calculate(context.Background(), domain.PDARecord{
+		NamaLokasi: "pda-test",
+		TMA:        3,
+		RecordedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("Calculate returned error: %v", err)
+	}
+	if !res2.IsValid {
+		t.Fatal("expected valid result for pda-test (case insensitive cache)")
+	}
+
+	// GetAllByNamaLokasi should have been called only once (for the first miss)
+	if got := repo.getByNamaLokasiCalls["PDA-Test"]; got != 1 {
+		t.Fatalf("GetAllByNamaLokasi calls for PDA-Test = %d, want 1", got)
+	}
+	if got := repo.getByNamaLokasiCalls["pda-test"]; got != 0 {
+		t.Fatalf("GetAllByNamaLokasi calls for pda-test = %d, want 0 (should use cache)", got)
+	}
+}
+
+func TestDebitCalculatorInvalidateCacheIsCaseInsensitive(t *testing.T) {
+	repo := &fakeFormulaRepo{formulas: map[string][]domain.FormulaParams{
+		"pda-test": {
+			{
+				NamaLokasi:      "pda-test",
+				C:               10,
+				H0:              0,
+				B:               1,
+				TMAMin:          0,
+				TMAMinInclusive: true,
+				TMAMax:          10,
+				TMAMaxInclusive: true,
+				Priority:        1,
+			},
+		},
+	}}
+
+	calc := NewDebitCalculator(repo)
+
+	// Populate cache
+	_, _ = calc.Calculate(context.Background(), domain.PDARecord{
+		NamaLokasi: "pda-test",
+		TMA:        1,
+	})
+
+	// Invalidate with different casing
+	calc.InvalidateCache("PDA-Test")
+
+	// Next call should re-fetch from repo
+	_, _ = calc.Calculate(context.Background(), domain.PDARecord{
+		NamaLokasi: "pda-test",
+		TMA:        1,
+	})
+
+	if got := repo.getByNamaLokasiCalls["pda-test"]; got != 2 {
+		t.Fatalf("expected 2 repo calls after invalidation, got %d", got)
+	}
+}
+
+func TestDebitCalculatorBatchPreloadNormalizesKeys(t *testing.T) {
+	repo := &fakeFormulaRepo{formulas: map[string][]domain.FormulaParams{
+		"pda-a": {
+			{
+				NamaLokasi:      "pda-a",
+				C:               10,
+				H0:              0,
+				B:               1,
+				TMAMin:          0,
+				TMAMinInclusive: true,
+				TMAMax:          10,
+				TMAMaxInclusive: true,
+				Priority:        1,
+			},
+		},
+	}}
+
+	calc := NewDebitCalculator(repo)
+	results, err := calc.CalculateBatch(context.Background(), []domain.PDARecord{
+		{NamaLokasi: "PDA-A", TMA: 2},
+		{NamaLokasi: "pda-a", TMA: 3},
+		{NamaLokasi: " PDA-A ", TMA: 4},
+	})
+	if err != nil {
+		t.Fatalf("CalculateBatch returned error: %v", err)
+	}
+
+	// All records should resolve to the same normalized station and be valid
+	for i, result := range results {
+		if !result.IsValid {
+			t.Fatalf("result %d expected valid for normalized key", i)
+		}
+	}
+
+	if len(results) != 3 {
+		t.Fatalf("results len = %d, want 3", len(results))
+	}
+
+	// GetAll should have been called exactly once (batch preload)
+	if repo.getAllCalls != 1 {
+		t.Fatalf("GetAll calls = %d, want 1", repo.getAllCalls)
+	}
+}
